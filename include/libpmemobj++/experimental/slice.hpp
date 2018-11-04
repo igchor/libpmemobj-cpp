@@ -79,6 +79,7 @@ public:
 			throw std::out_of_range("pmem::obj::slice");
 	}
 
+
 	/**
 	 * Defaulted copy constructor.
 	 */
