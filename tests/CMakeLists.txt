@@ -238,4 +238,7 @@ if(WIN32)
 	add_test_generic(ctl_win none)
 endif()
 
+build_test(p_policy p_policy/p_policy.cpp)
+add_test_generic(p_policy none)
+
 add_subdirectory(external)

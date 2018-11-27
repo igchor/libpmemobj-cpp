@@ -38,10 +38,11 @@
 #ifndef LIBPMEMOBJ_CPP_P_HPP
 #define LIBPMEMOBJ_CPP_P_HPP
 
-#include <memory>
-
 #include "libpmemobj++/detail/common.hpp"
 #include "libpmemobj++/detail/specialization.hpp"
+#include "libpmemobj++/policy.hpp"
+
+#include <memory>
 
 namespace pmem
 {
@@ -60,11 +61,13 @@ namespace obj
  * persistent_ptr.
  * @snippet doc_snippets/persistent.cpp p_property_example
  */
-template <typename T>
+template <typename T, Policy P = Policy::weak>
 class p {
-	typedef p<T> this_type;
+	typedef p<T, P> this_type;
 
 public:
+	static constexpr Policy policy = P;
+
 	/**
 	 * Value constructor.
 	 *
@@ -72,14 +75,23 @@ public:
 	 *
 	 * @param _val const reference to the value to be assigned.
 	 */
-	p(const T &_val) noexcept : val{_val}
+	p(const T &_val)
 	{
+		detail::check_policy<p, policy>(this);
+	}
+
+	p(const p &rhs)
+	{
+		detail::check_policy<p, policy>(this);
 	}
 
 	/**
 	 * Defaulted constructor.
 	 */
-	p() = default;
+	p()
+	{
+		detail::check_policy<p, policy>(this);
+	}
 
 	/**
 	 * Assignment operator.
@@ -94,7 +106,15 @@ public:
 	p &
 	operator=(const p &rhs)
 	{
-		this_type(rhs).swap(*this);
+		get_rw() = rhs.get_ro();
+
+		return *this;
+	}
+
+	p &
+	operator=(const T &rhs)
+	{
+		get_rw() = rhs;
 
 		return *this;
 	}
@@ -109,13 +129,13 @@ public:
 	 * @throw pmem::transaction_error when adding the object to the
 	 *	transaction failed.
 	 */
-	template <typename Y,
+	template <typename Y, Policy U,
 		  typename = typename std::enable_if<
 			  std::is_convertible<Y, T>::value>::type>
 	p &
-	operator=(const p<Y> &rhs)
+	operator=(const p<Y, U> &rhs)
 	{
-		this_type(rhs).swap(*this);
+		get_rw() = rhs.get_ro();
 
 		return *this;
 	}
@@ -141,7 +161,7 @@ public:
 	T &
 	get_rw()
 	{
-		detail::conditional_add_to_tx(this);
+		detail::add_to_tx<p, policy>(this);
 
 		return this->val;
 	}
@@ -165,12 +185,11 @@ public:
 	 * @throw pmem::transaction_error when adding the object to the
 	 *	transaction failed.
 	 */
+	template <Policy U>
 	void
-	swap(p &other)
+	swap(p<T, U> &other)
 	{
-		detail::conditional_add_to_tx(this);
-		detail::conditional_add_to_tx(&other);
-		std::swap(this->val, other.val);
+		std::swap(get_rw(), other.get_rw());
 	}
 
 private:
@@ -183,11 +202,35 @@ private:
  * Non-member swap function as required by Swappable concept.
  * en.cppreference.com/w/cpp/concept/Swappable
  */
-template <class T>
+template <class T, Policy P, Policy U>
 inline void
-swap(p<T> &a, p<T> &b)
+swap(p<T, P> &a, p<T, U> &b)
 {
 	a.swap(b);
+}
+
+namespace weak
+{
+template <typename T>
+using p = ::pmem::obj::p<T, ::pmem::obj::Policy::weak>;
+}
+
+namespace tx_only
+{
+template <typename T>
+using p = ::pmem::obj::p<T, ::pmem::obj::Policy::tx_only>;
+}
+
+namespace pmem_only
+{
+template <typename T>
+using p = ::pmem::obj::p<T, ::pmem::obj::Policy::pmem_only>;
+}
+
+namespace restricted
+{
+template <typename T>
+using p = ::pmem::obj::p<T, ::pmem::obj::Policy::restricted>;
 }
 
 } /* namespace obj */

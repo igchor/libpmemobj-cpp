@@ -39,7 +39,9 @@
 #define LIBPMEMOBJ_CPP_COMMON_HPP
 
 #include "libpmemobj++/detail/pexceptions.hpp"
+#include "libpmemobj++/policy.hpp"
 #include "libpmemobj/tx_base.h"
+
 #include <typeinfo>
 
 #if defined(__GNUC__) || defined(__clang__)
@@ -62,20 +64,51 @@ class persistent_ptr;
 namespace detail
 {
 
+template <typename T, pmem::obj::Policy policy>
+inline typename std::enable_if<policy == pmem::obj::Policy::weak>::type
+check_policy(const T *that)
+{
+	return;
+}
+
+template <typename T, pmem::obj::Policy policy>
+inline typename std::enable_if<policy == pmem::obj::Policy::tx_only>::type
+check_policy(const T *that)
+{
+	if (pmemobj_tx_stage() != TX_STAGE_WORK && pmemobj_pool_by_ptr(that))
+		throw transaction_error(
+			"Pmem object modified outside of a transaction");
+}
+
+template <typename T, pmem::obj::Policy policy>
+inline typename std::enable_if<policy == pmem::obj::Policy::pmem_only>::type
+check_policy(const T *that)
+{
+	if (!pmemobj_pool_by_ptr(that))
+		throw transaction_error("Object is not on pmem");
+}
+
+template <typename T, pmem::obj::Policy policy>
+inline typename std::enable_if<policy == pmem::obj::Policy::restricted>::type
+check_policy(const T *that)
+{
+	check_policy<T, pmem::obj::Policy::pmem_only>(that);
+	check_policy<T, pmem::obj::Policy::tx_only>(that);
+}
 /*
- * Conditionally add 'count' objects to a transaction.
- *
- * Adds count objects starting from `that` to the transaction if '*that' is
- * within a pmemobj pool and there is an active transaction.
- * Does nothing otherwise.
+ * Add count objects starting from `that` to the transaction. Policy
+ * template parameter specifies behaviour od this function when it is called
+ * with pointer to element on stack or is called outside transaction.
  *
  * @param[in] that pointer to the first object being added to the transaction.
  * @param[in] count number of elements to be added to the transaction.
  */
-template <typename T>
+template <typename T, pmem::obj::Policy policy>
 inline void
-conditional_add_to_tx(const T *that, std::size_t count = 1)
+add_to_tx(const T *that, std::size_t count = 1)
 {
+	check_policy<T, policy>(that);
+
 	if (count == 0)
 		return;
 
@@ -89,6 +122,13 @@ conditional_add_to_tx(const T *that, std::size_t count = 1)
 	if (pmemobj_tx_add_range_direct(that, sizeof(*that) * count))
 		throw transaction_error("Could not add object(s) to the"
 					" transaction.");
+}
+
+template <typename T>
+inline void
+conditional_add_to_tx(const T *that, std::size_t count = 1)
+{
+	return add_to_tx<T, pmem::obj::Policy::weak>(that, count);
 }
 
 /*

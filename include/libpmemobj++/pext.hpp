@@ -39,6 +39,8 @@
 #define LIBPMEMOBJ_CPP_PEXT_HPP
 
 #include "libpmemobj++/p.hpp"
+#include "libpmemobj++/policy.hpp"
+
 #include <iostream>
 #include <limits>
 
@@ -51,9 +53,9 @@ namespace obj
 /**
  * Ostream operator overload.
  */
-template <typename T>
+template <typename T, Policy P>
 std::ostream &
-operator<<(std::ostream &os, const p<T> &pp)
+operator<<(std::ostream &os, const p<T, P> &pp)
 {
 	return os << pp.get_ro();
 }
@@ -61,9 +63,9 @@ operator<<(std::ostream &os, const p<T> &pp)
 /**
  * Istream operator overload.
  */
-template <typename T>
+template <typename T, Policy P>
 std::istream &
-operator>>(std::istream &is, p<T> &pp)
+operator>>(std::istream &is, p<T, P> &pp)
 {
 	is >> pp.get_rw();
 	return is;
@@ -72,9 +74,9 @@ operator>>(std::istream &is, p<T> &pp)
 /**
  * Prefix increment operator overload.
  */
-template <typename T>
-p<T> &
-operator++(p<T> &pp)
+template <typename T, Policy P>
+p<T, P> &
+operator++(p<T, P> &pp)
 {
 	++(pp.get_rw());
 	return pp;
@@ -83,9 +85,9 @@ operator++(p<T> &pp)
 /**
  * Prefix decrement operator overload.
  */
-template <typename T>
-p<T> &
-operator--(p<T> &pp)
+template <typename T, Policy P>
+p<T, P> &
+operator--(p<T, P> &pp)
 {
 	--(pp.get_rw());
 	return pp;
@@ -94,11 +96,11 @@ operator--(p<T> &pp)
 /**
  * Postfix increment operator overload.
  */
-template <typename T>
-p<T>
-operator++(p<T> &pp, int)
+template <typename T, Policy P>
+p<T, P>
+operator++(p<T, P> &pp, int)
 {
-	p<T> temp = pp;
+	p<T, P> temp = pp;
 	++pp;
 	return temp;
 }
@@ -106,11 +108,11 @@ operator++(p<T> &pp, int)
 /**
  * Postfix decrement operator overload.
  */
-template <typename T>
-p<T>
-operator--(p<T> &pp, int)
+template <typename T, Policy P>
+p<T, P>
+operator--(p<T, P> &pp, int)
 {
-	p<T> temp = pp;
+	p<T, P> temp = pp;
 	--pp;
 	return temp;
 }
@@ -118,20 +120,9 @@ operator--(p<T> &pp, int)
 /**
  * Addition assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator+=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() += rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Addition assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator+=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator+=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() += rhs;
 	return lhs;
@@ -140,20 +131,9 @@ operator+=(p<T> &lhs, const Y &rhs)
 /**
  * Subtraction assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator-=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() -= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Subtraction assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator-=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator-=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() -= rhs;
 	return lhs;
@@ -162,20 +142,9 @@ operator-=(p<T> &lhs, const Y &rhs)
 /**
  * Multiplication assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator*=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() *= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Multiplication assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator*=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator*=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() *= rhs;
 	return lhs;
@@ -184,20 +153,9 @@ operator*=(p<T> &lhs, const Y &rhs)
 /**
  * Division assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator/=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() /= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Division assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator/=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator/=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() /= rhs;
 	return lhs;
@@ -206,20 +164,9 @@ operator/=(p<T> &lhs, const Y &rhs)
 /**
  * Modulo assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator%=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() %= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Modulo assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator%=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator%=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() %= rhs;
 	return lhs;
@@ -228,20 +175,9 @@ operator%=(p<T> &lhs, const Y &rhs)
 /**
  * Bitwise AND assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator&=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() &= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Bitwise AND assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator&=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator&=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() &= rhs;
 	return lhs;
@@ -250,20 +186,9 @@ operator&=(p<T> &lhs, const Y &rhs)
 /**
  * Bitwise OR assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator|=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() |= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Bitwise OR assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator|=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator|=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() |= rhs;
 	return lhs;
@@ -272,20 +197,9 @@ operator|=(p<T> &lhs, const Y &rhs)
 /**
  * Bitwise XOR assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator^=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() ^= rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Bitwise XOR assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator^=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator^=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() ^= rhs;
 	return lhs;
@@ -294,20 +208,9 @@ operator^=(p<T> &lhs, const Y &rhs)
 /**
  * Bitwise left shift assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator<<=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() = lhs.get_ro() << rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Bitwise left shift assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator<<=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator<<=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() = lhs.get_ro() << rhs;
 	return lhs;
@@ -316,20 +219,9 @@ operator<<=(p<T> &lhs, const Y &rhs)
 /**
  * Bitwise right shift assignment operator overload.
  */
-template <typename T, typename Y>
-p<T> &
-operator>>=(p<T> &lhs, const p<Y> &rhs)
-{
-	lhs.get_rw() = lhs.get_ro() >> rhs.get_ro();
-	return lhs;
-}
-
-/**
- * Bitwise right shift assignment operator overload.
- */
-template <typename T, typename Y>
-p<T> &
-operator>>=(p<T> &lhs, const Y &rhs)
+template <typename T, typename Y, Policy P>
+p<T, P> &
+operator>>=(p<T, P> &lhs, const Y &rhs)
 {
 	lhs.get_rw() = lhs.get_ro() >> rhs;
 	return lhs;
@@ -342,8 +234,8 @@ operator>>=(p<T> &lhs, const Y &rhs)
 namespace std
 {
 
-template <typename T>
-struct numeric_limits<pmem::obj::p<T>> : public numeric_limits<T> {
+template <typename T, pmem::obj::Policy P>
+struct numeric_limits<pmem::obj::p<T, P>> : public numeric_limits<T> {
 
 	static constexpr bool is_specialized = true;
 };
