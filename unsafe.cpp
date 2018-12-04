@@ -4,9 +4,9 @@ p<int> pint;
 
 transaction::run([&] {
     pint = 5;                               // ok, snapshotted
-    foo_ptr = make_persistent<>();          // error (or allowed but considered dangerous?)
+    foo_ptr = make_persistent<>();          // ok?
     pmem_foo_ptr = make_persistent<>();     // ok
-    make_persistent_atomic(foo_ptr);        // error (or allowed?)
+    make_persistent_atomic(foo_ptr);        // ok?
     make_persistent_atomic(pmem_foo_ptr);   // error
 });
 
