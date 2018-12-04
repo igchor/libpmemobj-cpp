@@ -1,0 +1,12 @@
+		X			| 		policies 		| 		unsafe_function 		|		unsafe_scope		|		|
+global switch (e.g. debug only) 	|		                                                                                           
+new namespace				|                                                           
+template parameter (old as default)	|                   
+
+
+
+GLOBAL SWITCH = dodatkowa flaga (-EXTRA_DEBUG), ma wpływ tylko na add_to_tx,
+włącza dodatkowe checki (asserty / warniningi?), flaga mogłaby przyjmowć politykę(?).
+
+Problem - wiele modułów.
+Można powiązać z unsafe_function (unsafe wyłącza asserty niezależnie od flagi).

@@ -1,3 +1,7 @@
+--------------------------------------------------------------------------------
+USAGE:
+--------------------------------------------------------------------------------
+
 persistent_ptr<foo> foo_ptr;
 p<persistent_ptr<foo>> pmem_foo_ptr;
 p<int> pint;
@@ -5,7 +9,7 @@ int simple_int;
 
 transaction::run([&] {
     pint = 5;                               // ok, snapshotted
-    foo_ptr = make_persistent<>();          // ok (but dangerous, not snapshotted)
+    foo_ptr = make_persistent<>();          // ok (but dangerous, not snapshotted - to be used for storing persistent_ptr on stack)
     pmem_foo_ptr = make_persistent<>();     // ok, snapshotted
     make_persistent_atomic(foo_ptr);        // ok?
     make_persistent_atomic(pmem_foo_ptr);   // error, atomic allocation inside tx
