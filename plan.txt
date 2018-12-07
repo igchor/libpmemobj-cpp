@@ -1,0 +1,11 @@
+Kontenery:
+- zawsze snapshotujemy w transakcji
+- unafe funkcje jako wytrych
+- krok.1 dodać trasaction::add/snapshot i zmienić array (udostępnić add_to_tx użytkownikom?)
+
+p<>:
+- nic nie robimy
+- polityki
+- unsafe_scope
+- unsafe function
+- modyfikacja pmemchecka (miałby opcję umożliwiającą wypisywanie warningów jeśli modyfikujemy zmienną na pmemie poza transakcją, możliwe adnotacje wyłączające warninig - funkcją unsafe, lub adnotacje uzytkownika)
