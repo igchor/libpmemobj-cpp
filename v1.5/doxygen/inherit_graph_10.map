@@ -1,0 +1,9 @@
+<map id="Graphical Class Hierarchy" name="Graphical Class Hierarchy">
+<area shape="rect" id="node1" href="$structpmem_1_1obj_1_1experimental_1_1contiguous__iterator.html" title="pmem::obj::experimental\l::contiguous_iterator\l\&lt; basic_contiguous_iterator\l\&lt; T \&gt;, T &amp;, T *\&gt;" alt="" coords="11,5,194,76"/>
+<area shape="rect" id="node2" href="$structpmem_1_1obj_1_1experimental_1_1basic__contiguous__iterator.html" title="Default non&#45;const iterator which adds element to a transaction on every access. " alt="" coords="254,64,465,105"/>
+<area shape="rect" id="node3" href="$structpmem_1_1obj_1_1experimental_1_1contiguous__iterator.html" title="pmem::obj::experimental\l::contiguous_iterator\l\&lt; const_contiguous_iterator\l\&lt; T \&gt;, const T &amp;, const T *\&gt;" alt="" coords="9,165,197,236"/>
+<area shape="rect" id="node4" href="$structpmem_1_1obj_1_1experimental_1_1const__contiguous__iterator.html" title="Const iterator. " alt="" coords="254,136,465,177"/>
+<area shape="rect" id="node5" href="$structpmem_1_1obj_1_1experimental_1_1contiguous__iterator.html" title="pmem::obj::experimental\l::contiguous_iterator\l\&lt; range_snapshotting_iterator\l\&lt; T \&gt;, T &amp;, T *\&gt;" alt="" coords="5,260,200,331"/>
+<area shape="rect" id="node6" href="$structpmem_1_1obj_1_1experimental_1_1range__snapshotting__iterator.html" title="Non&#45;const iterator which adds elements to a transaction in a bulk. " alt="" coords="248,223,471,264"/>
+<area shape="rect" id="node7" href="$structpmem_1_1obj_1_1experimental_1_1operator__base.html" title="This struct provides comparison operators between const_contiguous_iterator for specified type (as al..." alt="" coords="20,100,185,141"/>
+</map>

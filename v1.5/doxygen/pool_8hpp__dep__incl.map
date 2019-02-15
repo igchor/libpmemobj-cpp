@@ -1,0 +1,12 @@
+<map id="libpmemobj++/pool.hpp" name="libpmemobj++/pool.hpp">
+<area shape="rect" id="node2" href="$make__persistent__atomic_8hpp.html" title="Persistent_ptr atomic allocation functions for objects. " alt="" coords="5,273,209,315"/>
+<area shape="rect" id="node3" href="$persistent__ptr_8hpp.html" title="Persistent smart pointer. " alt="" coords="343,80,509,121"/>
+<area shape="rect" id="node11" href="$transaction_8hpp.html" title="C++ pmemobj transactions. " alt="" coords="533,87,730,114"/>
+<area shape="rect" id="node4" href="$allocator_8hpp.html" title="Persistent memory aware allocator. " alt="" coords="145,184,328,211"/>
+<area shape="rect" id="node5" href="$check__persistent__ptr__array_8hpp.html" title="Compile time type check for make_persistent. " alt="" coords="353,169,499,225"/>
+<area shape="rect" id="node9" href="$array_8hpp.html" title="Array container with std::array compatible interface. " alt="" coords="524,177,707,218"/>
+<area shape="rect" id="node10" href="$utils_8hpp.html" title="Libpmemobj C++ utils. " alt="" coords="731,184,889,211"/>
+<area shape="rect" id="node6" href="$make__persistent_8hpp.html" title="Persistent_ptr transactional allocation functions for objects. " alt="" coords="234,281,463,307"/>
+<area shape="rect" id="node7" href="$make__persistent__array_8hpp.html" title="Persistent_ptr allocation functions for arrays. " alt="" coords="488,273,692,315"/>
+<area shape="rect" id="node8" href="$make__persistent__array__atomic_8hpp.html" title="Atomic persistent_ptr allocation functions for arrays. " alt="" coords="716,273,920,315"/>
+</map>

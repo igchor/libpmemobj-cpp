@@ -1,0 +1,5 @@
+<map id="pmem::obj::experimental::operator_base&lt; T &gt;" name="pmem::obj::experimental::operator_base&lt; T &gt;">
+<area shape="rect" id="node2" href="$structpmem_1_1obj_1_1experimental_1_1basic__contiguous__iterator.html" title="Default non&#45;const iterator which adds element to a transaction on every access. " alt="" coords="225,5,435,47"/>
+<area shape="rect" id="node3" href="$structpmem_1_1obj_1_1experimental_1_1const__contiguous__iterator.html" title="Const iterator. " alt="" coords="225,71,435,112"/>
+<area shape="rect" id="node4" href="$structpmem_1_1obj_1_1experimental_1_1range__snapshotting__iterator.html" title="Non&#45;const iterator which adds elements to a transaction in a bulk. " alt="" coords="219,136,441,177"/>
+</map>

@@ -1,0 +1,9 @@
+<map id="libpmemobj++/allocation_flag.hpp" name="libpmemobj++/allocation_flag.hpp">
+<area shape="rect" id="node2" href="$make__persistent_8hpp.html" title="Persistent_ptr transactional allocation functions for objects. " alt="" coords="5,102,235,129"/>
+<area shape="rect" id="node3" href="$make__persistent__array_8hpp.html" title="Persistent_ptr allocation functions for arrays. " alt="" coords="259,95,463,136"/>
+<area shape="rect" id="node7" href="$make__persistent__array__atomic_8hpp.html" title="Atomic persistent_ptr allocation functions for arrays. " alt="" coords="487,95,691,136"/>
+<area shape="rect" id="node8" href="$make__persistent__atomic_8hpp.html" title="Persistent_ptr atomic allocation functions for objects. " alt="" coords="715,95,919,136"/>
+<area shape="rect" id="node4" href="$vector_8hpp.html" title="Vector container with std::vector compatible interface. " alt="" coords="270,184,453,225"/>
+<area shape="rect" id="node5" href="$basic__string_8hpp.html" title="String container with std::basic_string compatible interface. " alt="" coords="270,273,453,315"/>
+<area shape="rect" id="node6" href="$string_8hpp.html" title="String typedefs for common character types. " alt="" coords="270,363,453,404"/>
+</map>

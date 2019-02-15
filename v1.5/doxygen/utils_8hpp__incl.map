@@ -1,0 +1,9 @@
+<map id="libpmemobj++/utils.hpp" name="libpmemobj++/utils.hpp">
+<area shape="rect" id="node2" href="$pexceptions_8hpp.html" title="Custom exceptions. " alt="" coords="1212,423,1350,464"/>
+<area shape="rect" id="node5" href="$persistent__ptr_8hpp.html" title="Persistent smart pointer. " alt="" coords="348,80,513,121"/>
+<area shape="rect" id="node10" href="$common_8hpp.html" title="Commonly used functionality. " alt="" coords="1084,333,1222,375"/>
+<area shape="rect" id="node13" href="$persistent__ptr__base_8hpp.html" title="Base class for persistent_ptr. " alt="" coords="192,169,357,211"/>
+<area shape="rect" id="node16" href="$specialization_8hpp.html" title="Helper template for persistent ptr specialization. " alt="" coords="420,333,558,375"/>
+<area shape="rect" id="node18" href="$pool_8hpp.html" title="C++ pmemobj pool. " alt="" coords="868,177,1025,203"/>
+<area shape="rect" id="node22" href="$p_8hpp.html" title="Resides on pmem property template. " alt="" coords="527,259,667,285"/>
+</map>
