@@ -260,6 +260,20 @@ insert_erase_lookup_test(nvobj::pool<root> &pop)
 }
 }
 
+void Dump( const void * mem, unsigned int n ) {
+  const char * p = reinterpret_cast< const char *>( mem );
+  for ( unsigned int i = 0; i < n; i++ ) {
+     std::cout << std::hex << int(p[i]) << " ";
+
+     if (i % 8 == 7)
+	std::cout << "\n";
+
+     if (i % 64 == 63)
+	std::cout << "---------------- Cacheline --------------- \n";
+  }
+  std::cout << std::endl;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -279,6 +293,9 @@ main(int argc, char *argv[])
 		pmem::obj::transaction::run(pop, [&] {
 			pop.root()->cons =
 				nvobj::make_persistent<persistent_map_type>();
+
+
+			Dump(pop.root()->cons.get(), sizeof(persistent_map_type));
 		});
 	} catch (pmem::pool_error &pe) {
 		UT_FATAL("!pool::create: %s %s", pe.what(), path);

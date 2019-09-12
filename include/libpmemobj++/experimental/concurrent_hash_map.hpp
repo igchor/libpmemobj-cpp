@@ -983,6 +983,14 @@ public:
 		}
 
 		assert(mask() == embedded_buckets - 1);
+
+		memset(this, 0, sizeof(*this));
+		memset(&my_pool_uuid, 1, sizeof(my_pool_uuid));
+		memset(&my_mask, 2, sizeof(my_mask));
+		memset(&my_table, 3, sizeof(my_table));
+		memset(&my_size, 4, sizeof(my_size));
+		memset(&my_embedded_segment, 5, sizeof(my_embedded_segment));
+		memset(&my_segment_enable_mutex, 6, sizeof(my_segment_enable_mutex));
 	}
 
 	/**
