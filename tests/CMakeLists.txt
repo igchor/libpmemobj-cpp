@@ -392,6 +392,9 @@ if(PMEMVLT_PRESENT AND ENABLE_CONCURRENT_HASHMAP)
 		build_test(concurrent_hash_map_pmreorder_erase concurrent_hash_map_pmreorder_erase/concurrent_hash_map_pmreorder_erase.cpp)
 		add_test_generic(NAME concurrent_hash_map_pmreorder_erase CASE 0 TRACERS none)
 
+		build_test(concurrent_hash_map_pmreorder_break_rehash concurrent_hash_map_pmreorder_break_rehash/concurrent_hash_map_pmreorder_break_rehash.cpp)
+		add_test_generic(NAME concurrent_hash_map_pmreorder_break_rehash CASE 0 TRACERS none)
+
 		set(TEST concurrent_hash_map_pmreorder_break_insert)
 		build_test(${TEST} ${TEST}/${TEST}.cpp)
 
