@@ -43,6 +43,8 @@
 #include <libpmemobj++/detail/lock_traits.hpp>
 #include <libpmemobj++/detail/template_helpers.hpp>
 
+#include <libpmemobj++/experimental/enumerable_thread_specific.hpp>
+
 #include <libpmemobj++/make_persistent.hpp>
 #include <libpmemobj++/mutex.hpp>
 #include <libpmemobj++/p.hpp>
@@ -773,6 +775,8 @@ public:
 	/** Zero segment. */
 	bucket my_embedded_segment[embedded_buckets];
 
+	experimental::enumerable_thread_specific<p<size_t>> tls_size;
+
 	/* --------------------------------------------------------- */
 
 	const std::atomic<hashcode_type> &
@@ -1013,12 +1017,13 @@ public:
 			new_node = pmem::obj::make_persistent<Node>(
 				b->node_list, std::forward<Args>(args)...);
 			b->node_list = new_node; /* bucket is locked */
+
+			tls_size.local()++;
 		});
 
 		/* prefix form is to enforce allocation after the first item
 		 * inserted */
 		size_t sz = ++(my_size.get_rw());
-		pop.persist(&my_size, sizeof(my_size));
 
 		return sz;
 	}
@@ -2694,11 +2699,12 @@ search:
 		 */
 		delete_node(del);
 
+		this->tls_size.local()--;
+
 		transaction::commit();
 	}
 
 	--(this->my_size.get_rw());
-	pop.persist(this->my_size);
 }
 
 	return true;

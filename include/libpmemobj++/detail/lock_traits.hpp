@@ -30,6 +30,9 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#ifndef LIBPMEMOBJ_CPP_LOCK_TRAITS_HPP
+#define LIBPMEMOBJ_CPP_LOCK_TRAITS_HPP
+
 #include <libpmemobj++/detail/template_helpers.hpp>
 
 #include <cassert>
@@ -222,3 +225,5 @@ public:
 
 } /* namespace detail */
 } /* namespace pmem */
+
+#endif /* LIBPMEMOBJ_CPP_LOCK_TRAITS_HPP */
