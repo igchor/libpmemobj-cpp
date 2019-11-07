@@ -125,6 +125,8 @@ public:
 	void
 	check_items_count(size_t expected)
 	{
+		std::cout << map->size() << " " << expected << std::endl;
+
 		UT_ASSERT(map->size() == expected);
 		UT_ASSERT(std::distance(map->begin(), map->end()) ==
 			  int(expected));
