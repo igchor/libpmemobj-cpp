@@ -52,6 +52,8 @@
 #include <libpmemobj++/detail/persistent_pool_ptr.hpp>
 #include <libpmemobj++/shared_mutex.hpp>
 
+#include <libpmemobj++/experimental/enumerable_thread_specific.hpp>
+
 #include <atomic>
 #include <cassert>
 #include <functional>
@@ -784,6 +786,68 @@ private:
 	segment_index_t my_seg;
 }; /* End of class segment_facade_impl */
 
+/*
+ * This class implements a "distributed" size. Each thread obtains unique size
+ * variable which it can modify transactionally. When the total size is needed
+ * (for example on recovery) sizes from all threads must be summed up.
+ */
+struct consistent_size_type {
+	consistent_size_type()
+	{
+		on_init_size_ = 0;
+	}
+
+	size_t
+	restore()
+	{
+		pool_base pop = pool_base{pmemobj_pool_by_ptr(this)};
+
+		size_t last_run_size = 0;
+		for (auto &t_size : per_thread_size)
+			last_run_size += t_size;
+
+		transaction::run(pop, [&] {
+			on_init_size_ += last_run_size;
+			per_thread_size.clear();
+		});
+
+		return on_init_size_;
+	}
+
+	p<size_t> &
+	get()
+	{
+		/*
+		 * This is only true when called from singlethreaded methods
+		 * like swap() or operator=. In that case it's safe to directly
+		 * modify on_init_size_.
+		 */
+		if (pmemobj_tx_stage() == TX_STAGE_WORK)
+			return on_init_size_;
+
+		return per_thread_size.local();
+	}
+
+	void
+	clear()
+	{
+		assert(pmemobj_tx_stage() == TX_STAGE_WORK);
+
+		per_thread_size.clear();
+		on_init_size_ = 0;
+	}
+
+private:
+	experimental::enumerable_thread_specific<p<size_t>> per_thread_size;
+
+	/**
+	 * This variable holds real size after hash_map is initialized.
+	 * It holds real value of size only after initialization (before any
+	 * insert/remove).
+	 */
+	p<size_t> on_init_size_;
+};
+
 /**
  * Base class of concurrent_hash_map.
  * Implements logic not dependant to Key/Value types.
@@ -885,6 +949,8 @@ public:
 	/** Segment mutex type. */
 	using segment_enable_mutex_t = pmem::obj::mutex;
 
+	enum feature_flags : uint32_t { FEATURE_CONSISTENT_SIZE = 1 };
+
 	/** Compat and incompat features of a layout */
 	struct features {
 		p<uint32_t> compat;
@@ -921,13 +987,16 @@ public:
 	/* It must be in separate cache line from my_mask due to performance
 	 * effects */
 	/** Size of container in stored items. */
-	p<std::atomic<size_type>> my_size;
+	std::atomic<size_type> my_size;
 
 	/** Padding to the end of cacheline */
 	std::aligned_storage<24, 8>::type padding2;
 
+	/** Per-thread size */
+	detail::persistent_pool_ptr<consistent_size_type> consistent_size_ptr;
+
 	/** Reserved for future use */
-	std::aligned_storage<64, 8>::type reserved;
+	std::aligned_storage<56, 8>::type reserved;
 
 	/** Segment mutex used to enable new segment. */
 	segment_enable_mutex_t my_segment_enable_mutex;
@@ -941,7 +1010,7 @@ public:
 	static constexpr features
 	header_features()
 	{
-		return {0, 0};
+		return {FEATURE_CONSISTENT_SIZE, 0};
 	}
 
 	const std::atomic<hashcode_type> &
@@ -954,6 +1023,18 @@ public:
 	mask() noexcept
 	{
 		return my_mask.get_rw();
+	}
+
+	size_t
+	size() const
+	{
+		return my_size.load(std::memory_order_relaxed);
+	}
+
+	consistent_size_type &
+	consistent_size()
+	{
+		return *(consistent_size_ptr.get(this->my_pool_uuid));
 	}
 
 	/** Const segment facade type */
@@ -972,12 +1053,10 @@ public:
 			"std::atomic should have the same layout as underlying integral type");
 
 #if LIBPMEMOBJ_CPP_VG_HELGRIND_ENABLED
-		VALGRIND_HG_DISABLE_CHECKING(&my_size, sizeof(my_size));
 		VALGRIND_HG_DISABLE_CHECKING(&my_mask, sizeof(my_mask));
 #endif
 		layout_features = header_features();
 
-		my_size.get_rw() = 0;
 		PMEMoid oid = pmemobj_oid(this);
 
 		assert(!OID_IS_NULL(oid));
@@ -994,6 +1073,24 @@ public:
 			segment_facade_t seg(my_table, i);
 			mark_rehashed<false>(pop, seg);
 		}
+
+		this->consistent_size_ptr = make_persistent<
+			concurrent_hash_map_internal::consistent_size_type>();
+	}
+
+	~hash_map_base()
+	{
+		auto pop = get_pool_base();
+
+		// XXX: handle abort
+		transaction::run(pop, [&] {
+			if (consistent_size_ptr.get(this->my_pool_uuid)) {
+				delete_persistent<concurrent_hash_map_internal::
+							  consistent_size_type>(
+					consistent_size_ptr.get_persistent_ptr(
+						this->my_pool_uuid));
+			}
+		});
 	}
 
 	/**
@@ -1007,6 +1104,7 @@ public:
 		VALGRIND_HG_DISABLE_CHECKING(&my_mask, sizeof(my_mask));
 #endif
 #if LIBPMEMOBJ_CPP_VG_PMEMCHECK_ENABLED
+		VALGRIND_PMC_REMOVE_PMEM_MAPPING(&my_size, sizeof(my_size));
 		VALGRIND_PMC_REMOVE_PMEM_MAPPING(&my_mask, sizeof(my_mask));
 #endif
 
@@ -1021,14 +1119,6 @@ public:
 		}
 
 		mask().store(m, std::memory_order_relaxed);
-	}
-
-	void
-	restore_size(size_type actual_size)
-	{
-		my_size.get_rw().store(actual_size, std::memory_order_relaxed);
-		pool_base pop = get_pool_base();
-		pop.persist(my_size);
 	}
 
 	/**
@@ -1182,18 +1272,19 @@ public:
 	{
 		pool_base pop = get_pool_base();
 
+		auto &size = this->consistent_size().get();
+
 		pmem::obj::transaction::run(pop, [&] {
 			new_node = pmem::obj::make_persistent<Node>(
 				b->node_list, std::forward<Args>(args)...);
 			b->node_list = new_node; /* bucket is locked */
+
+			/* Increment consistent size */
+			++size;
 		});
 
-		/* prefix form is to enforce allocation after the first item
-		 * inserted */
-		size_t sz = ++(my_size.get_rw());
-		pop.persist(&my_size, sizeof(my_size));
-
-		return sz;
+		/* Increment volatile size */
+		return ++(this->my_size);
 	}
 
 	/**
@@ -1241,7 +1332,7 @@ public:
 
 		--buckets;
 
-		bool is_initial = (my_size.get_ro() == 0);
+		bool is_initial = this->size() == 0;
 
 		for (size_type m = mask(); buckets > m; m = mask())
 			enable_segment(
@@ -1265,11 +1356,9 @@ public:
 			this->mask() = table.mask().exchange(
 				this->mask(), std::memory_order_relaxed);
 
-			/* Swap my_size */
-			this->my_size.get_rw() =
-				table.my_size.get_rw().exchange(
-					this->my_size.get_ro(),
-					std::memory_order_relaxed);
+			/* Swap consistent size */
+			std::swap(this->consistent_size_ptr,
+				  table.consistent_size_ptr);
 
 			for (size_type i = 0; i < embedded_buckets; ++i)
 				this->my_embedded_segment[i].node_list.swap(
@@ -1281,6 +1370,10 @@ public:
 
 			transaction::commit();
 		}
+
+		/* Swap volatile size */
+		this->my_size = table.my_size.exchange(
+			this->my_size, std::memory_order_relaxed);
 	}
 
 	/**
@@ -1576,6 +1669,7 @@ protected:
 	using hash_map_base::check_growth;
 	using hash_map_base::check_mask_race;
 	using hash_map_base::embedded_buckets;
+	using hash_map_base::FEATURE_CONSISTENT_SIZE;
 	using hash_map_base::get_bucket;
 	using hash_map_base::get_pool_base;
 	using hash_map_base::header_features;
@@ -1855,7 +1949,7 @@ protected:
 	}
 
 	void
-	check_features()
+	check_incompat_features()
 	{
 		if (layout_features.incompat != header_features().incompat)
 			throw pmem::layout_error(
@@ -2053,20 +2147,28 @@ public:
 	void
 	runtime_initialize(bool graceful_shutdown = false)
 	{
-		check_features();
+		check_incompat_features();
 
 		calculate_mask();
 
-		if (!graceful_shutdown) {
-			auto actual_size =
-				std::distance(this->begin(), this->end());
-			assert(actual_size >= 0);
-			this->restore_size(size_type(actual_size));
+		if (!(layout_features.compat & FEATURE_CONSISTENT_SIZE)) {
+			auto pop = get_pool_base();
+			transaction::run(pop, [&] {
+				this->consistent_size_ptr = make_persistent<
+					concurrent_hash_map_internal::
+						consistent_size_type>();
+
+				layout_features.compat |=
+					FEATURE_CONSISTENT_SIZE;
+			});
 		} else {
-			assert(this->size() ==
-			       size_type(std::distance(this->begin(),
-						       this->end())));
+			assert(this->consistent_size_ptr != nullptr);
 		}
+
+		this->my_size = this->consistent_size().restore();
+
+		assert(this->size() ==
+		       size_type(std::distance(this->begin(), this->end())));
 	}
 
 	/**
@@ -2192,7 +2294,7 @@ public:
 	size_type
 	size() const
 	{
-		return this->my_size.get_ro();
+		return hash_map_base::size();
 	}
 
 	/**
@@ -2201,7 +2303,7 @@ public:
 	bool
 	empty() const
 	{
-		return this->my_size.get_ro() == 0;
+		return this->size() == 0;
 	}
 
 	/**
@@ -2831,6 +2933,8 @@ search:
 		goto search;
 	}
 
+	auto &size = this->consistent_size().get();
+
 	{
 		transaction::manual tx(pop);
 
@@ -2851,11 +2955,12 @@ search:
 		 */
 		delete_node(del);
 
+		--size;
+
 		transaction::commit();
 	}
 
-	--(this->my_size.get_rw());
-	pop.persist(this->my_size);
+	--(this->my_size);
 }
 
 	return true;
@@ -2924,7 +3029,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType, ScopedLockType>::clear()
 
 		transaction::manual tx(pop);
 
-		this->my_size.get_rw() = 0;
+		this->consistent_size().clear();
 		segment_index_t s = segment_traits_t::segment_index_of(m);
 
 		assert(s + 1 == this->block_table_size ||
@@ -2938,6 +3043,8 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType, ScopedLockType>::clear()
 
 		transaction::commit();
 	}
+
+	this->my_size = 0;
 }
 
 template <typename Key, typename T, typename Hash, typename KeyEqual,
@@ -2969,7 +3076,9 @@ void
 concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType, ScopedLockType>::
 	internal_copy(const concurrent_hash_map &source)
 {
-	reserve(source.my_size.get_ro());
+	auto pop = get_pool_base();
+
+	reserve(source.size());
 	internal_copy(source.begin(), source.end());
 }
 

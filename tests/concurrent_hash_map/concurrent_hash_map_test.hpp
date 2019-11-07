@@ -144,6 +144,7 @@ public:
 	{
 		check_items_count();
 		rehash();
+		check_items_count();
 		reinitialize();
 	}
 
@@ -298,7 +299,6 @@ insert_and_lookup_key_test(nvobj::pool<root> &pop, size_t concurrency = 8,
 {
 	PRINT_TEST_PARAMS;
 	ConcurrentHashMapTestPrimitives test(pop, concurrency * thread_items);
-
 	parallel_exec(concurrency, [&](size_t thread_id) {
 		int begin = thread_id * thread_items;
 		int end = begin + int(thread_items);
