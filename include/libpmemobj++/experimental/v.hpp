@@ -53,9 +53,23 @@ namespace obj
 namespace experimental
 {
 
+enum tx_callback_stage {
+	on_free, // on_reservation_cancel + on_persistent_free
+	on_restore_before_memcpy,
+	on_restore_after_memcpy
+};
+
+typedef void (*pmemobj_tx_callback)(void *addr, size_t size);
+
+void pmemobj_tx_register_callback(void *addr, size_t size, enum tx_callback_stage stage, pmemobj_tx_callback callback);
+
 /**
  * pmem::obj::experimental::v - volatile resides on pmem class.
  *
+ * Using this class inside of a union or manually calling it's destructor
+ * (not by freeing object which contains v) is dangerous. It can lead to memory
+ * leaks if used without caution.
+ * 
  * v class is a property-like template class that has to be used for all
  * volatile variables that reside on persistent memory.
  * This class ensures that the enclosed type is always properly initialized by
@@ -82,11 +96,31 @@ public:
 	 */
 	~v()
 	{
-		/* Destructor of val should NOT be called */
+		if (pmemobj_tx_stage() == TX_STAGE_WORK) {
+			val.~T();
+
+			/* Register all needed callback for v<> destruction */
+			// XXX: ???? get();
+
+			// XXX - should we handle case when destructor is
+			// called manually (not from delete_persitent)?
+			// pmemobj_tx_register_callback(this, sizeof(*this), on_restore_after_memcpy, [](void *addr, size_t size){
+			//	(void) size; // is size needed?
+			//
+			//	auto &object = *static_cast<T*>(addr);
+			//
+			//	object.vlt = {0};
+			// });
+		} else {
+			val.~T();
+			vlt = {0};
+		}
 	}
 
 	/**
 	 * Assignment operator.
+	 * 
+	 * XXX: should we keep this function? non-const is safer
 	 */
 	v &
 	operator=(const T &rhs)
@@ -105,7 +139,9 @@ public:
 	v &
 	operator=(v &rhs)
 	{
-		return *this = rhs.get();
+		get() = rhs.get();
+
+		return *this;
 	}
 
 	/**
@@ -147,6 +183,42 @@ public:
 			pmem::detail::c_style_construct<T, decltype(arg_pack),
 							Args...>,
 			static_cast<void *>(&arg_pack)));
+
+		// XXX - get information whether pmemobj_volatile constructed
+		// the object. Just modify pmemobj_volatile to return this?
+		// internal _get_value already returns this information.
+		auto created = true;
+
+		if (created) {
+			pmemobj_tx_register_callback(this, sizeof(*this), on_free, [](void *addr, size_t size){
+				(void) size; // is size needed?
+
+				auto &object = *static_cast<T*>(addr);
+
+				object.val.~T(); // XXXX - we should not call this!!!! We shoudl just destory in ~v<> and set vlt to 0 here (is this correct?????????)
+				object.vlt = {0};
+			});
+
+			// XXX: problem with passing template functions as callbacks can be solved by
+			// 1. passing pointer to some virtual caller which would call specific destructor
+			// 2. storing pointer to destructor in the v itself (next to the data)
+
+			pmemobj_tx_register_callback(this, sizeof(*this), on_restore_before_memcpy, [](void *addr, size_t size){
+				(void) size; // is size needed?
+
+				auto &object = *static_cast<T*>(addr);
+
+				object.val.~T();
+			});
+
+			pmemobj_tx_register_callback(this, sizeof(*this), on_restore_after_memcpy, [](void *addr, size_t size){
+				(void) size; // is size needed?
+
+				auto &object = *static_cast<T*>(addr);
+
+				object.vlt = {0};
+			});
+		}
 
 		return *value;
 	}
