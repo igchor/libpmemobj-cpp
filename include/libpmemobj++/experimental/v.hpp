@@ -66,9 +66,7 @@ void pmemobj_tx_register_callback(void *addr, size_t size, enum tx_callback_stag
 /**
  * pmem::obj::experimental::v - volatile resides on pmem class.
  *
- * Using this class inside of a union or manually calling it's destructor
- * (not by freeing object which contains v) is dangerous. It can lead to memory
- * leaks if used without caution.
+ * Calling get() inside transaction is not thread-safe.
  * 
  * v class is a property-like template class that has to be used for all
  * volatile variables that reside on persistent memory.
@@ -96,25 +94,8 @@ public:
 	 */
 	~v()
 	{
-		if (pmemobj_tx_stage() == TX_STAGE_WORK) {
-			val.~T();
-
-			/* Register all needed callback for v<> destruction */
-			// XXX: ???? get();
-
-			// XXX - should we handle case when destructor is
-			// called manually (not from delete_persitent)?
-			// pmemobj_tx_register_callback(this, sizeof(*this), on_restore_after_memcpy, [](void *addr, size_t size){
-			//	(void) size; // is size needed?
-			//
-			//	auto &object = *static_cast<T*>(addr);
-			//
-			//	object.vlt = {0};
-			// });
-		} else {
-			val.~T();
-			vlt = {0};
-		}
+		val.~T();
+		vlt = {0};
 	}
 
 	/**
@@ -186,8 +167,21 @@ public:
 
 		// XXX - get information whether pmemobj_volatile constructed
 		// the object. Just modify pmemobj_volatile to return this?
-		// internal _get_value already returns this information.
 		auto created = true;
+
+		/**
+		 * There are (at least) 4 cases to consider:
+		 * 1. tx {alloc(); get(); abort(); }
+		 * 	v<> will be destroyed in on_free callback
+		 * 2. tx {snapshot(); get(); abort();}
+		 * 	v<> will be destroyed in on_restore callback
+		 * 3. tx {free(); abort();}
+		 * 	v<> dtor will be called in free() which will destroy the
+		 * 	value and in on_restore callback we assign 0 to vlt
+		 * 4. tx {v<>.~v(); abort();}
+		 * 	value will be deleted in v<>.~v() and in on_restore
+		 * 	callback we assign 0 to vlt
+		 */
 
 		if (created) {
 			pmemobj_tx_register_callback(this, sizeof(*this), on_free, [](void *addr, size_t size){
@@ -195,7 +189,14 @@ public:
 
 				auto &object = *static_cast<T*>(addr);
 
-				object.val.~T(); // XXXX - we should not call this!!!! We shoudl just destory in ~v<> and set vlt to 0 here (is this correct?????????)
+				/* Object might have already been deleted inside
+				 * v<> destructor. It's also possible that it
+				 * was not - for example in case of aborting
+				 * transaction in which v<> was allocated.
+				 */
+				if (object.vlt.runid != 0)
+					val.~T();
+
 				object.vlt = {0};
 			});
 
@@ -204,11 +205,12 @@ public:
 			// 2. storing pointer to destructor in the v itself (next to the data)
 
 			pmemobj_tx_register_callback(this, sizeof(*this), on_restore_before_memcpy, [](void *addr, size_t size){
-				(void) size; // is size needed?
+				// XXX: should we reconstruct the object (using costructor)?
+				// If so, how to know whether v<> was not initialied (no get())
+				// or it was already destructed - always call get() inside dtor?
 
-				auto &object = *static_cast<T*>(addr);
-
-				object.val.~T();
+				if (object.vlt.runid != 0)
+					val.~T();
 			});
 
 			pmemobj_tx_register_callback(this, sizeof(*this), on_restore_after_memcpy, [](void *addr, size_t size){
