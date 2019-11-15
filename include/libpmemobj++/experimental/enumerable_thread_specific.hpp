@@ -47,6 +47,24 @@
 #include <thread>
 #include <unordered_map>
 
+bool operator==(const PMEMoid &lhs, const PMEMoid &rhs)
+{
+	return lhs.pool_uuid_lo == rhs.pool_uuid_lo && lhs.off == rhs.off;
+}
+
+
+namespace std
+{
+	template<>
+	struct hash<PMEMoid>
+	{
+		std::size_t operator()(const PMEMoid &oid) const
+		{
+			return oid.pool_uuid_lo + oid.off;
+		}
+	};
+}
+
 namespace pmem
 {
 namespace obj
@@ -224,12 +242,11 @@ private:
 	};
 
 private:
-	/* private helper methods */
-	map_value_type storage_emplace();
-	pool_base get_pool() const noexcept;
+	std::unordered_map<PMEMoid, T*>& get_map();
 
-	v<map_wrapper> _map;
-	map_rw_mutex _map_mutex;
+	/* private helper methods */
+	T* storage_emplace();
+	pool_base get_pool() const noexcept;
 
 	storage_type _storage;
 	storage_mutex _storage_mutex;
@@ -275,7 +292,6 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 enumerable_thread_specific<T, Map, Mutex, Storage>::enumerable_thread_specific(
 	enumerable_thread_specific &other)
 {
-	_map.get(other._map.get());
 	_storage = other._storage;
 }
 
@@ -292,7 +308,6 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 enumerable_thread_specific<T, Map, Mutex, Storage>::enumerable_thread_specific(
 	enumerable_thread_specific &&other)
 {
-	_map.get(std::move(other._map.get()));
 	_storage = std::move(other._storage);
 }
 
@@ -304,9 +319,9 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 enumerable_thread_specific<T, Map, Mutex,
 			   Storage>::~enumerable_thread_specific()
 {
-	/* XXX: will not be called in case of transaction abort */
-	/* must be called manually */
-	_map.get().~map_wrapper();
+	auto &map = get_map();
+
+	map.erase(pmemobj_oid(this));
 }
 
 /**
@@ -324,6 +339,15 @@ enumerable_thread_specific<T, Map, Mutex, Storage>::local()
 	return local(exists);
 }
 
+template <typename T, template <typename...> typename Map, typename Mutex,
+	  typename Storage>
+std::unordered_map<PMEMoid, T*>&
+enumerable_thread_specific<T, Map, Mutex, Storage>::get_map()
+{
+	thread_local std::unordered_map<PMEMoid, T*> map;
+	return map;
+}
+
 /**
  * Returns data reference for the current thread.
  * For the new thread, element by reference will be default constructed.
@@ -337,27 +361,18 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 typename enumerable_thread_specific<T, Map, Mutex, Storage>::reference
 enumerable_thread_specific<T, Map, Mutex, Storage>::local(bool &exists)
 {
-	assert(pmemobj_tx_stage() != TX_STAGE_WORK);
+	auto &map = get_map();
 
-	const map_key_type key = std::this_thread::get_id();
+	auto it = map.emplace(pmemobj_oid(this), nullptr).first;
 
-	/* read lock to try find key in map */
-	map_scoped_lock lock(_map_mutex, false);
-
-	typename map_type::const_iterator it = _map.get()->find(key);
-	exists = it != _map.get()->cend();
-	/* return value if thread already exists in map */
-	if (exists) {
-		return _storage[(*it).second];
+	if (it->second == nullptr) {
+		it->second = storage_emplace();
+		exists = false;
+	} else {
+		exists = true;
 	}
 
-	lock.upgrade_to_writer();
-
-	/* create bucket if it's not found */
-	map_value_type value = storage_emplace();
-	/* XXX: should be emplace, see class description */
-	_map.get()->operator[](key) = value;
-	return _storage[value];
+	return *(it->second);
 }
 
 /**
@@ -367,13 +382,12 @@ enumerable_thread_specific<T, Map, Mutex, Storage>::local(bool &exists)
  */
 template <typename T, template <typename...> typename Map, typename Mutex,
 	  typename Storage>
-typename enumerable_thread_specific<T, Map, Mutex, Storage>::map_value_type
+T*
 enumerable_thread_specific<T, Map, Mutex, Storage>::storage_emplace()
 {
 	storage_scoped_lock lock(_storage_mutex);
 
-	_storage.emplace_back();
-	return _storage.size() - 1;
+	return &_storage.emplace_back();
 }
 
 /**
@@ -387,7 +401,6 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 void
 enumerable_thread_specific<T, Map, Mutex, Storage>::clear()
 {
-	_map.get()->clear();
 	_storage.clear();
 }
 
