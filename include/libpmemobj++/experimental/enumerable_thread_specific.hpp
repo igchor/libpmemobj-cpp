@@ -321,6 +321,8 @@ enumerable_thread_specific<T, Map, Mutex,
 {
 	auto &map = get_map();
 
+	// XXX THIS is only for this THREAD! - we should keep list of tls maps
+	// to clear()? or use singleton?
 	map.erase(pmemobj_oid(this));
 }
 
