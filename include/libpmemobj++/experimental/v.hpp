@@ -39,10 +39,14 @@
 #define LIBPMEMOBJ_CPP_V_HPP
 
 #include <memory>
+#include <shared_mutex>
 #include <tuple>
 
 #include <libpmemobj++/detail/common.hpp>
 #include <libpmemobj++/detail/life.hpp>
+
+#include <unordered_map>
+#include <shared_mutex>
 
 namespace pmem
 {
@@ -52,6 +56,138 @@ namespace obj
 
 namespace experimental
 {
+
+struct pmemoid_hash
+{
+	std::size_t operator()(const PMEMoid &oid) const
+	{
+		return oid.pool_uuid_lo + oid.off;
+	}
+};
+
+struct pmemoid_equal_to
+{
+	bool operator()(const PMEMoid &lhs, const PMEMoid &rhs) const
+	{
+		return lhs.pool_uuid_lo == rhs.pool_uuid_lo && lhs.off == rhs.off;
+	}
+};
+
+/* We could make key a template paramter - for example instead of PMEMoid,
+ * std::pair<PMEMoid, thread_id> could be used (tls case) */
+class v2 {
+public:
+	template <typename T>
+	T &
+	get()
+	{
+		return get<T>(pmemobj_oid(this));
+	}
+
+	~v2()
+	{
+		destroy(pmemobj_oid(this));
+	}
+
+	template <typename T>
+	T &
+	get(PMEMoid oid)
+	{
+		auto &map = get_map();
+
+		{
+			std::shared_lock<rwlock_type> lock(get_rwlock());
+			auto it = map.find(oid);
+			if (it != map.end())
+				return *static_cast<T *>(it->second.get());
+		}
+
+		if (pmemobj_tx_stage() == TX_STAGE_WORK)
+			throw pmem::transaction_scope_error("");
+
+		// XXX: if we had on_free callback we can also call this in a transaction
+		// just call destroy(oid) in on_free
+
+		{
+			std::unique_lock<rwlock_type> lock(get_rwlock());
+
+			auto deleter = [](void const *data) {
+				T const *p = static_cast<T const *>(data);
+				delete p;
+			};
+
+			std::unique_ptr<void, std::add_pointer<void(const void *)>::type> ptr(new T, deleter);
+
+			auto it = map.emplace(std::piecewise_construct,  std::forward_as_tuple(oid),  std::forward_as_tuple(new T, deleter)).first;
+
+			/*
+			 * emplace() could failed if another thread created
+			 * the element when we dropped read and acquire write
+			 * lock, in that case it will just point to existing
+			 * element.
+			 */
+			return *static_cast<T *>(it->second.get());
+		}
+	}
+
+	static void destroy(PMEMoid oid)
+	{
+		std::unique_lock<rwlock_type> lock(get_rwlock());
+		get_map().erase(oid);
+
+		////////////////////////////
+
+		// register_on_free([]{get_map().erase(oid)});
+		// get_map().find(oid)->second.reset(nullptr);
+	}
+
+	static void
+	clear_from_pool(uint64_t pool_id)
+	{
+		/* Lock is needed in case there are objects in several pools */
+		std::unique_lock<rwlock_type> lock(get_rwlock());
+		auto &map = get_map();
+
+		for (auto it = begin(map); it != end(map); it++) {
+			if (it->first.pool_uuid_lo == pool_id)
+				it = map.erase(it);
+			else
+				++it;
+		}
+	}
+
+private:
+
+
+	// XXX: it would be better to have a container which does not reallocate
+	// elements - we could have lock-free read.
+
+	// XXX: could we make objects cacheable? If in map, we would hold T** and
+	// return T* to the user, he could cache the pointer (in runtime_initialize for example).
+	// destroy(PMEMoid) would not remove entry from hashmap, instead it would
+	// only do: *T = nullptr. Every reference to cached value would first check
+	// if *T is nullptr or not - if it is, it could just call get() (or set pointer directly?)
+	//
+	// The hashmap would ONLY be cleared at pool close() (+ in on_free callback)?
+	using map_type =
+		std::unordered_map<PMEMoid,
+				   std::unique_ptr<void, std::add_pointer<void(const void *)>::type>, pmemoid_hash, pmemoid_equal_to>;
+	using rwlock_type = std::shared_timed_mutex;
+
+	static map_type &
+	get_map()
+	{
+		static map_type map;
+		return map;
+	}
+
+	static rwlock_type &
+	get_rwlock()
+	{
+		static rwlock_type rwlock;
+		return rwlock;
+	}
+};
 
 /**
  * pmem::obj::experimental::v - volatile resides on pmem class.
