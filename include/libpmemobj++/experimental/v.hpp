@@ -83,10 +83,32 @@ public:
 	{
 		return get<T>(pmemobj_oid(this));
 	}
+	template <typename T>
+	T*
+	get_if_exists()
+	{
+		return get_if_exists<T>(pmemobj_oid(this));
+	}
 
 	~v2()
 	{
 		destroy(pmemobj_oid(this));
+	}
+
+	template <typename T>
+	T*
+	get_if_exists(PMEMoid oid)
+	{
+		auto &map = get_map();
+
+		{
+			std::shared_lock<rwlock_type> lock(get_rwlock());
+			auto it = map.find(oid);
+			if (it != map.end())
+				return static_cast<T *>(it->second.get());
+			else
+				return nullptr;
+		}
 	}
 
 	template <typename T>
@@ -103,7 +125,7 @@ public:
 		}
 
 		if (pmemobj_tx_stage() == TX_STAGE_WORK)
-			throw pmem::transaction_scope_error("");
+			throw pmem::transaction_scope_error("get() cannot be called in a transaction");
 
 		// XXX: if we had on_free callback we can also call this in a transaction
 		// just call destroy(oid) in on_free

@@ -356,7 +356,10 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 void
 enumerable_thread_specific<T, Map, Mutex, Storage>::clear()
 {
-	_map.get<map_type>().clear();
+	auto map = _map.get_if_exists<map_type>();
+	if (map)
+		map->clear();
+
 	_storage.clear();
 }
 
