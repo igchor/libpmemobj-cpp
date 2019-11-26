@@ -166,9 +166,10 @@ public:
 	static void
 	clear_from_pool(uint64_t pool_id)
 	{
+		std::unique_lock<rwlock_type> lock(get_rwlock());
 		auto &map = get_map();
 
-		for (auto it = begin(map); it != end(map); it++) {
+		for (auto it = map.begin(); it != map.end();) {
 			if (it->first.pool_uuid_lo == pool_id)
 				it = map.erase(it);
 			else

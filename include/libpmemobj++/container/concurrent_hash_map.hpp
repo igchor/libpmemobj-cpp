@@ -827,31 +827,6 @@ struct consistent_size_type {
 		return size;
 	}
 
-	friend void
-	swap(consistent_size_type &lhs, consistent_size_type &rhs)
-	{
-		pool_base pop = pool_base{pmemobj_pool_by_ptr(&lhs)};
-
-		pmem::obj::transaction::run(pop, [&] {
-			/* It's ok to call those functions inside a transaction.
-			 * Even if transaction abort, we get consistent state:
-			 * - pmem state will be rolled back
-			 * - volatile state will be cleared but that's fine - we
-			 *   only care about pmem, recovery is independent from
-			 *   volatile state.
-			 *
-			 * XXX: MAKE TEST
-			 */
-
-			/* Make sure we restore and clear per-thread size before
-			 * swap */
-			lhs.restore();
-			rhs.restore();
-
-			std::swap(lhs.on_init_size_, rhs.on_init_size_);
-		});
-	}
-
 	void
 	clear()
 	{
@@ -1293,7 +1268,7 @@ public:
 	{
 		pool_base pop = get_pool_base();
 
-		auto size = this->consistent_size().get();
+		auto &size = this->consistent_size().get();
 
 		pmem::obj::transaction::run(pop, [&] {
 			new_node = pmem::obj::make_persistent<Node>(
@@ -1378,7 +1353,11 @@ public:
 				this->mask(), std::memory_order_relaxed);
 
 			/* Swap size */
-			swap(this->consistent_size(), table.consistent_size());
+			std::swap(this->consistent_size_ptr, table.consistent_size_ptr);
+			this->my_size =
+                               table.my_size.exchange(
+                                       this->my_size,
+                                       std::memory_order_relaxed);
 
 			for (size_type i = 0; i < embedded_buckets; ++i)
 				this->my_embedded_segment[i].node_list.swap(
@@ -2952,7 +2931,7 @@ search:
 		goto search;
 	}
 
-	auto size = this->consistent_size().get();
+	auto &size = this->consistent_size().get();
 
 	{
 		transaction::manual tx(pop);
@@ -3095,6 +3074,8 @@ void
 concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType, ScopedLockType>::
 	internal_copy(const concurrent_hash_map &source)
 {
+	auto pop = get_pool_base();
+
 	reserve(source.size());
 	internal_copy(source.begin(), source.end());
 }
