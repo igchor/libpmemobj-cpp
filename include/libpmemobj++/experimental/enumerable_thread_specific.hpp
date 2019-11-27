@@ -242,7 +242,11 @@ private:
 	};
 
 private:
-	std::unordered_map<PMEMoid, T*>& get_map();
+	std::unordered_map<PMEMoid, std::pair<T*, size_t>>& get_map();
+
+	std::unordered_map<PMEMoid, size_t>& get_counter_map();
+
+	size_t &get_counter();
 
 	/* private helper methods */
 	T* storage_emplace();
@@ -278,6 +282,26 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 	  typename Storage>
 enumerable_thread_specific<T, Map, Mutex, Storage>::enumerable_thread_specific()
 {
+	get_counter()++;
+}
+
+template <typename T, template <typename...> typename Map, typename Mutex,
+	  typename Storage>
+size_t& enumerable_thread_specific<T, Map, Mutex, Storage>::get_counter()
+{
+	auto &map = get_counter_map();
+
+	{
+		std::shared_lock<rwlock> lock;
+		auto it = map.find(pmemobj_oid(this));
+		if (it != map.end())
+			return it->second;
+	}
+
+	{
+		std::unique_lock<rwlock> lock;
+		return map.emplace(pmemobj_oid(this), 0).first.second;
+	}
 }
 
 /**
@@ -319,11 +343,7 @@ template <typename T, template <typename...> typename Map, typename Mutex,
 enumerable_thread_specific<T, Map, Mutex,
 			   Storage>::~enumerable_thread_specific()
 {
-	auto &map = get_map();
-
-	// XXX THIS is only for this THREAD! - we should keep list of tls maps
-	// to clear()? or use singleton?
-	map.erase(pmemobj_oid(this));
+	// do nothing
 }
 
 /**
@@ -343,10 +363,19 @@ enumerable_thread_specific<T, Map, Mutex, Storage>::local()
 
 template <typename T, template <typename...> typename Map, typename Mutex,
 	  typename Storage>
-std::unordered_map<PMEMoid, T*>&
+std::unordered_map<PMEMoid, std::pair<T*, size_t>>&
 enumerable_thread_specific<T, Map, Mutex, Storage>::get_map()
 {
-	thread_local std::unordered_map<PMEMoid, T*> map;
+	thread_local std::unordered_map<PMEMoid, std::pair<T*, size_t>> map;
+	return map;
+}
+
+template <typename T, template <typename...> typename Map, typename Mutex,
+	  typename Storage>
+std::unordered_map<PMEMoid, size_t>&
+enumerable_thread_specific<T, Map, Mutex, Storage>::get_counter_map()
+{
+	static std::unordered_map<PMEMoid, size_t> map;
 	return map;
 }
 
@@ -364,14 +393,20 @@ typename enumerable_thread_specific<T, Map, Mutex, Storage>::reference
 enumerable_thread_specific<T, Map, Mutex, Storage>::local(bool &exists)
 {
 	auto &map = get_map();
+	auto &counter = get_counter();
 
-	auto it = map.emplace(pmemobj_oid(this), nullptr).first;
+	auto it = map.emplace(pmemobj_oid(this), std::make_pair(nullptr, counter)).first;
 
-	if (it->second == nullptr) {
-		it->second = storage_emplace();
+	if (it->second.first == nullptr) {
+		it->second.first = storage_emplace();
 		exists = false;
 	} else {
-		exists = true;
+		if (it->second.second == counter) {
+			exists = true;
+		} else {
+			it->second.second = counter;
+			it->second.first = storage_emplace();
+		}
 	}
 
 	return *(it->second);
