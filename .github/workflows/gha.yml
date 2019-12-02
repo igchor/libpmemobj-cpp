@@ -58,7 +58,7 @@ jobs:
        - name: Build
          env:
            CONFIGURATION: ${{ matrix.CONFIG }}
-         run: msbuild build/ALL_BUILD.vcxproj /property:Configuration=${env:CONFIGURATION} /verbosity:minimal
+         run: msbuild build/ALL_BUILD.vcxproj /property:Configuration=${env:CONFIGURATION} /verbosity:minimal /m
 
        - name: Test
          run: |
