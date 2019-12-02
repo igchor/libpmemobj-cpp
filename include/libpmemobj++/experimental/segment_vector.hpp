@@ -121,9 +121,11 @@ public:
 	segment_iterator operator-(difference_type idx) const;
 	segment_iterator &operator-=(difference_type idx);
 	template <bool C>
-	difference_type operator+(const segment_iterator<Container, C> &rhs);
+	difference_type
+	operator+(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	difference_type operator-(const segment_iterator<Container, C> &rhs);
+	difference_type
+	operator-(const segment_iterator<Container, C> &rhs) const;
 
 	/**
 	 * Compare methods
@@ -131,17 +133,17 @@ public:
 	 * non-constant and constant interators
 	 */
 	template <bool C>
-	bool operator==(const segment_iterator<Container, C> &rhs);
+	bool operator==(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	bool operator!=(const segment_iterator<Container, C> &rhs);
+	bool operator!=(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	bool operator<(const segment_iterator<Container, C> &rhs);
+	bool operator<(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	bool operator>(const segment_iterator<Container, C> &rhs);
+	bool operator>(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	bool operator<=(const segment_iterator<Container, C> &rhs);
+	bool operator<=(const segment_iterator<Container, C> &rhs) const;
 	template <bool C>
-	bool operator>=(const segment_iterator<Container, C> &rhs);
+	bool operator>=(const segment_iterator<Container, C> &rhs) const;
 
 	/* Access methods */
 	reference operator*() const;
@@ -302,7 +304,7 @@ template <typename Container, bool is_const>
 template <bool C>
 typename segment_iterator<Container, is_const>::difference_type
 segment_iterator<Container, is_const>::operator+(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	return static_cast<difference_type>(index + rhs.index);
 }
@@ -316,7 +318,7 @@ template <typename Container, bool is_const>
 template <bool C>
 typename segment_iterator<Container, is_const>::difference_type
 segment_iterator<Container, is_const>::operator-(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	return static_cast<difference_type>(index - rhs.index);
 }
@@ -332,7 +334,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator==(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	return (table == rhs.table) && (index == rhs.index);
 }
@@ -349,7 +351,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator!=(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	return (table != rhs.table) || (index != rhs.index);
 }
@@ -368,7 +370,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator<(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	if (table != rhs.table)
 		throw std::invalid_argument("segment_iterator::operator<");
@@ -391,7 +393,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator>(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	if (table != rhs.table)
 		throw std::invalid_argument("segment_iterator::operator<");
@@ -414,7 +416,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator<=(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	if (table != rhs.table)
 		throw std::invalid_argument("segment_iterator::operator<");
@@ -437,7 +439,7 @@ template <typename Container, bool is_const>
 template <bool C>
 bool
 segment_iterator<Container, is_const>::operator>=(
-	const segment_iterator<Container, C> &rhs)
+	const segment_iterator<Container, C> &rhs) const
 {
 	if (table != rhs.table)
 		throw std::invalid_argument("segment_iterator::operator<");
