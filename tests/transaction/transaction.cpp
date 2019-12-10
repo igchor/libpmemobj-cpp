@@ -931,6 +931,91 @@ test_tx_snapshot(nvobj::pool<root> &pop)
 		UT_ASSERT(0);
 	}
 }
+
+void
+test_tx_callback(nvobj::pool<root> &pop)
+{
+	bool cb_called = false;
+
+	try {
+		nvobj::transaction::run(pop, [&] {
+			nvobj::transaction::register_callback(
+				nvobj::transaction::stage::on_commit{},
+				[&] { cb_called = true; });
+
+			UT_ASSERT(cb_called == false);
+		});
+
+		UT_ASSERT(cb_called == true);
+	} catch (...) {
+		UT_ASSERT(0);
+	}
+
+	cb_called = false;
+
+	try {
+		nvobj::transaction::run(pop, [&] {
+			nvobj::transaction::register_callback(
+				nvobj::transaction::stage::on_commit{},
+				[&] { cb_called = true; });
+
+			UT_ASSERT(cb_called == false);
+
+			nvobj::transaction::abort(0);
+
+			UT_ASSERT(0);
+		});
+	} catch (pmem::manual_tx_abort &) {
+		UT_ASSERT(cb_called == false);
+	} catch (...) {
+		UT_ASSERT(0);
+	}
+}
+
+template <typename T>
+void
+test_tx_callback_scope(nvobj::pool<root> &pop, std::function<void()> commit)
+{
+	bool cb_called = false;
+
+	try {
+		{
+			T to(pop);
+			nvobj::transaction::register_callback(
+				nvobj::transaction::stage::on_commit{},
+				[&] { cb_called = true; });
+
+			UT_ASSERT(cb_called == false);
+			commit();
+		}
+
+		UT_ASSERT(cb_called == true);
+	} catch (...) {
+		UT_ASSERT(0);
+	}
+
+	cb_called = false;
+
+	try {
+		{
+			T to(pop);
+
+			nvobj::transaction::register_callback(
+				nvobj::transaction::stage::on_commit{},
+				[&] { cb_called = true; });
+
+			UT_ASSERT(cb_called == false);
+
+			nvobj::transaction::abort(0);
+
+			UT_ASSERT(0);
+		}
+	} catch (pmem::manual_tx_abort &) {
+		UT_ASSERT(cb_called == false);
+	} catch (...) {
+		UT_ASSERT(0);
+	}
+}
 }
 
 int
@@ -967,6 +1052,10 @@ main(int argc, char *argv[])
 	test_tx_automatic_destructor_throw(pop);
 
 	test_tx_snapshot(pop);
+
+	test_tx_callback(pop);
+	test_tx_callback_scope<nvobj::transaction::manual>(pop, real_commit);
+	test_tx_callback_scope<nvobj::transaction::automatic>(pop, fake_commit);
 
 	pop.close();
 

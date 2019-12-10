@@ -40,6 +40,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include <libpmemobj++/detail/common.hpp>
 #include <libpmemobj++/pexceptions.hpp>
@@ -227,12 +228,13 @@ public:
 				return;
 
 			/* transaction ended normally */
-			if (pmemobj_tx_stage() == TX_STAGE_WORK)
+			if (pmemobj_tx_stage() == TX_STAGE_WORK) {
 				pmemobj_tx_commit();
-			/* transaction aborted, throw an exception */
-			else if (pmemobj_tx_stage() == TX_STAGE_ONABORT ||
-				 (pmemobj_tx_stage() == TX_STAGE_FINALLY &&
-				  pmemobj_tx_errno() != 0))
+				run_on_commit_callbacks();
+				/* transaction aborted, throw an exception */
+			} else if (pmemobj_tx_stage() == TX_STAGE_ONABORT ||
+				   (pmemobj_tx_stage() == TX_STAGE_FINALLY &&
+				    pmemobj_tx_errno() != 0))
 				throw pmem::transaction_error(
 					"Transaction aborted");
 		}
@@ -353,6 +355,8 @@ public:
 			throw pmem::transaction_error("wrong stage for commit");
 
 		pmemobj_tx_commit();
+
+		run_on_commit_callbacks();
 	}
 
 	static int
@@ -437,6 +441,8 @@ public:
 
 		if (stage == TX_STAGE_WORK) {
 			pmemobj_tx_commit();
+
+			run_on_commit_callbacks();
 		} else if (stage == TX_STAGE_ONABORT) {
 			(void)pmemobj_tx_end();
 			throw pmem::transaction_error("transaction aborted");
@@ -498,6 +504,33 @@ public:
 		}
 	}
 
+	struct stage {
+		struct on_commit {
+		};
+		struct on_abort {
+		};
+		struct finally {
+		};
+		struct work {
+		};
+		struct none {
+		};
+	};
+
+	template <typename T>
+	static void
+	register_callback(const T &, std::function<void()> f)
+	{
+		static_assert(std::is_same<T, stage::on_commit>::value,
+			      "Only on_commit callbacks are supported");
+	}
+
+	static void
+	register_callback(const stage::on_commit &, std::function<void()> f)
+	{
+		on_commit_callbacks().push_back(f);
+	}
+
 private:
 	/**
 	 * Recursively add locks to the active transaction.
@@ -531,6 +564,28 @@ private:
 	add_lock() noexcept
 	{
 		return 0;
+	}
+
+	static void
+	run_on_commit_callbacks()
+	{
+		if (pmemobj_tx_stage() != TX_STAGE_ONCOMMIT)
+			return;
+
+		auto &callbacks = on_commit_callbacks();
+
+		for (auto &cb : callbacks)
+			cb();
+
+		callbacks.clear();
+	}
+
+	static std::vector<std::function<void()>> &
+	on_commit_callbacks()
+	{
+		static thread_local std::vector<std::function<void()>>
+			callbacks;
+		return callbacks;
 	}
 };
 
