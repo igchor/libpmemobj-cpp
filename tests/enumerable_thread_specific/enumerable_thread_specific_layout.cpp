@@ -47,9 +47,18 @@ main(int argc, char *argv[])
 		return 1;
 	}
 
-	static_assert(sizeof(container_type<int>) == 2200, "");
-	static_assert(sizeof(container_type<char>) == 2200, "");
-	static_assert(sizeof(container_type<container_type<int>>) == 2200, "");
+	static_assert(
+		2184 ==
+			2 * sizeof(pmem::obj::shared_mutex) +
+				sizeof(pmem::obj::segment_vector<
+					int,
+					pmem::obj::
+						exponential_size_array_policy<>>),
+		"");
+
+	static_assert(sizeof(container_type<int>) == 2184, "");
+	static_assert(sizeof(container_type<char>) == 2184, "");
+	static_assert(sizeof(container_type<container_type<int>>) == 2184, "");
 
 	static_assert(std::is_standard_layout<container_type<char>>::value, "");
 

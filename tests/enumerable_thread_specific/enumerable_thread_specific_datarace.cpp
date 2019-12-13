@@ -54,6 +54,11 @@ public:
 	{
 	}
 
+	~Map()
+	{
+		counter = 0;
+	}
+
 	const_iterator
 	find(const Key &key) const
 	{
