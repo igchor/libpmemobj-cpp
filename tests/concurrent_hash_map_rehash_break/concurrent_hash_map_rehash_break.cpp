@@ -107,7 +107,7 @@ rehash(nvobj::pool<root> &pop)
 {
 	auto persistent_map = pop.root()->cons;
 
-	persistent_map->runtime_initialize(true);
+	persistent_map->runtime_initialize();
 
 	/* Force rehash */
 	auto ret = persistent_map->count(test_element);

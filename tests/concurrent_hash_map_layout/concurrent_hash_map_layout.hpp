@@ -152,7 +152,7 @@ struct hashmap_test : public MapType {
 		map->layout_features.incompat = static_cast<uint32_t>(-1);
 
 		try {
-			map->runtime_initialize(true);
+			map->runtime_initialize();
 			UT_ASSERT(0);
 		} catch (pmem::layout_error &) {
 		} catch (...) {
@@ -160,7 +160,7 @@ struct hashmap_test : public MapType {
 		}
 
 		try {
-			map->runtime_initialize(false);
+			map->runtime_initialize();
 			UT_ASSERT(0);
 		} catch (pmem::layout_error &) {
 		} catch (...) {
