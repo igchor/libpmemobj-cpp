@@ -30,79 +30,47 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-/*
- * concurrent_hash_map_insert_reopen.cpp -- pmem::obj::concurrent_hash_map test
- *
- */
-
 #include "../concurrent_hash_map/concurrent_hash_map_test.hpp"
 #include "unittest.hpp"
 
-/*
- * insert_reopen_test -- (internal) test insert operations and verify
- * consistency after reopen
- * pmem::obj::concurrent_hash_map<nvobj::p<int>, nvobj::p<int> >
- */
+const size_t thread_items = 500000;
+const size_t concurrency = 4;
+
 void
-insert_reopen_test(nvobj::pool<root> &pop, std::string path,
-		   size_t concurrency = 4)
+insert(nvobj::pool<root> &pop)
 {
-	PRINT_TEST_PARAMS;
+	ConcurrentHashMapTestPrimitives test(pop, concurrency * thread_items);
 
-	size_t thread_items = 50;
+	auto map = pop.root()->cons;
 
-	{
-		ConcurrentHashMapTestPrimitives test(
-			pop, concurrency * thread_items);
+	UT_ASSERT(map != nullptr);
 
-		auto map = pop.root()->cons;
+	map->runtime_initialize();
 
-		UT_ASSERT(map != nullptr);
+	parallel_exec(concurrency, [&](size_t thread_id) {
+		int begin = thread_id * thread_items;
+		int end = begin + int(thread_items);
+		for (int i = begin; i < end; ++i) {
+			persistent_map_type::value_type val(i, i);
+			test.insert<persistent_map_type::accessor>(val);
+		}
+	});
 
-		map->runtime_initialize();
+	test.check_items_count();
+}
 
-		parallel_exec(concurrency, [&](size_t thread_id) {
-			int begin = thread_id * thread_items;
-			int end = begin + int(thread_items);
-			for (int i = begin; i < end; ++i) {
-				persistent_map_type::value_type val(i, i);
-				test.insert<persistent_map_type::accessor>(val);
-			}
-		});
+void
+check(nvobj::pool<root> &pop)
+{
+	ConcurrentHashMapTestPrimitives test(pop, concurrency * thread_items);
 
-		test.check_items_count();
+	auto map = pop.root()->cons;
 
-		pop.close();
-	}
+	UT_ASSERT(map != nullptr);
 
-	{
-		size_t already_inserted_num = concurrency * thread_items;
+	map->runtime_initialize();
 
-		pop = nvobj::pool<root>::open(path, LAYOUT);
-
-		ConcurrentHashMapTestPrimitives test(
-			pop, concurrency * thread_items);
-
-		auto map = pop.root()->cons;
-
-		UT_ASSERT(map != nullptr);
-
-		map->runtime_initialize();
-
-		test.check_items_count();
-
-		parallel_exec(concurrency, [&](size_t thread_id) {
-			int begin = thread_id * thread_items;
-			int end = begin + int(thread_items);
-			for (int i = begin; i < end; ++i) {
-				persistent_map_type::value_type val(
-					i + int(already_inserted_num), i);
-				test.insert<persistent_map_type::accessor>(val);
-			}
-		});
-
-		test.check_items_count(already_inserted_num * 2);
-	}
+	test.check_items_count();
 }
 
 int
@@ -118,24 +86,25 @@ main(int argc, char *argv[])
 
 	nvobj::pool<root> pop;
 
-	try {
-		pop = nvobj::pool<root>::create(
-			path, LAYOUT, PMEMOBJ_MIN_POOL * 20, S_IWUSR | S_IRUSR);
-		pmem::obj::transaction::run(pop, [&] {
-			pop.root()->cons =
-				nvobj::make_persistent<persistent_map_type>();
-		});
-	} catch (pmem::pool_error &pe) {
-		UT_FATAL("!pool::create: %s %s", pe.what(), path);
+	if (std::string(argv[2]) == "c") {
+		try {
+			pop = nvobj::pool<root>::create(path, LAYOUT,
+							(1ULL << 30) * 100,
+							S_IWUSR | S_IRUSR);
+			pmem::obj::transaction::run(pop, [&] {
+				pop.root()->cons = nvobj::make_persistent<
+					persistent_map_type>();
+			});
+		} catch (pmem::pool_error &pe) {
+			UT_FATAL("!pool::create: %s %s", pe.what(), path);
+		}
+
+		insert(pop);
+	} else {
+		pop = nvobj::pool<root>::open(path, LAYOUT);
+
+		check(pop);
 	}
-
-	size_t concurrency = 8;
-	if (On_drd)
-		concurrency = 2;
-	std::cout << "Running tests for " << concurrency << " threads"
-		  << std::endl;
-
-	insert_reopen_test(pop, path, concurrency);
 
 	pop.close();
 	return 0;
