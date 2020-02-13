@@ -236,6 +236,9 @@ add_test_generic(NAME ctl CASE 0 TRACERS none
 build_test(defrag defrag/defrag.cpp)
 add_test_generic(NAME defrag TRACERS none pmemcheck memcheck)
 
+build_test(error_handling error_handling/error_handling.cpp)
+add_test_generic(NAME error_handling TRACERS none pmemcheck memcheck)
+
 if(WIN32)
 	build_test(ctl_win ctl_win/ctl_win.cpp)
 	add_test_generic(NAME ctl_win CASE 0 TRACERS none
