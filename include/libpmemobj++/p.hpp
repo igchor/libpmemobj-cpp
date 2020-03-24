@@ -65,7 +65,7 @@ public:
 	p &
 	operator=(const p &rhs)
 	{
-		this_type(rhs).swap(*this);
+		get_rw() = rhs.get_ro();
 
 		return *this;
 	}
@@ -86,7 +86,7 @@ public:
 	p &
 	operator=(const p<Y> &rhs)
 	{
-		this_type(rhs).swap(*this);
+		get_rw() = rhs.get_ro();
 
 		return *this;
 	}

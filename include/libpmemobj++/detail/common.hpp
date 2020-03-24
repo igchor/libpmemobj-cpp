@@ -65,6 +65,8 @@
 #include <drd.h>
 #endif
 
+#include <cassert>
+
 /*
  * Workaround for missing "is_trivially_copyable" in gcc < 5.0.
  * Be aware of a difference between __has_trivial_copy and is_trivially_copyable
@@ -135,6 +137,12 @@ namespace experimental
 namespace detail
 {
 
+inline int& counter()
+{
+	static int c = 0;
+	return c;
+}
+
 /*
  * Conditionally add 'count' objects to a transaction.
  *
@@ -160,6 +168,9 @@ conditional_add_to_tx(const T *that, std::size_t count = 1, uint64_t flags = 0)
 	/* 'that' is not in any open pool */
 	if (obj::check_if_on_pmem<T>::value && !pmemobj_pool_by_ptr(that))
 		return;
+
+	if (!obj::check_if_on_pmem<T>::value)
+		assert(pmemobj_pool_by_ptr(that));
 
 	if (pmemobj_tx_xadd_range_direct(that, sizeof(*that) * count, flags)) {
 		if (errno == ENOMEM)
