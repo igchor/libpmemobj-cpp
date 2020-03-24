@@ -104,6 +104,13 @@ namespace pmem
  */
 namespace obj
 {
+
+template <typename T>
+struct check_if_on_pmem
+{
+	static constexpr bool value = true;
+};
+
 template <typename T>
 class persistent_ptr;
 
@@ -151,7 +158,7 @@ conditional_add_to_tx(const T *that, std::size_t count = 1, uint64_t flags = 0)
 		return;
 
 	/* 'that' is not in any open pool */
-	if (!pmemobj_pool_by_ptr(that))
+	if (obj::check_if_on_pmem<T>::value && !pmemobj_pool_by_ptr(that))
 		return;
 
 	if (pmemobj_tx_xadd_range_direct(that, sizeof(*that) * count, flags)) {
