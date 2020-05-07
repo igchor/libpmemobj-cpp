@@ -220,8 +220,11 @@ test(int argc, char *argv[])
 		pop = nvobj::pool<root>::create(
 			path, LAYOUT, PMEMOBJ_MIN_POOL * 20, S_IWUSR | S_IRUSR);
 		nvobj::transaction::run(pop, [&] {
-			pop.root()->cons1 = nvobj::make_persistent<
-				persistent_map_type_int>();
+			pop.root()->cons1 =
+				nvobj::make_persistent<persistent_map_type_int>(
+					std::piecewise_construct,
+					std::forward_as_tuple(),
+					std::forward_as_tuple());
 			pop.root()->cons2 = nvobj::make_persistent<
 				persistent_map_type_string>();
 		});

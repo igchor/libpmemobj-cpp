@@ -666,6 +666,19 @@ public:
 		}
 	}
 
+	template <typename... Args1, typename... Args2, size_t... I1,
+		  size_t... I2>
+	concurrent_skip_list(std::piecewise_construct_t,
+			     std::tuple<Args1...> &compare_args,
+			     std::tuple<Args2...> &alloc_args,
+			     index_sequence<I1...>, index_sequence<I2...>)
+	    : _node_allocator(std::forward<Args2>(std::get<I2>(alloc_args))...),
+	      _compare(std::forward<Args1>(std::get<I1>(compare_args))...)
+	{
+		check_tx_stage_work();
+		init();
+	}
+
 	/**
 	 * Intialize concurrent_skip_list after process restart.
 	 * MUST be called everytime after process restart.
@@ -1716,7 +1729,7 @@ public:
 	 *
 	 * @return The associated allocator.
 	 */
-	allocator_type&
+	allocator_type &
 	get_allocator()
 	{
 		return _node_allocator;
@@ -1868,7 +1881,7 @@ public:
 	 *
 	 * @return The key comparison function object.
 	 */
-	key_compare&
+	key_compare &
 	key_comp()
 	{
 		return _compare;
@@ -2009,7 +2022,7 @@ private:
 	template <typename K, typename pointer_type, typename comparator>
 	persistent_node_ptr
 	internal_find_position(size_type level, pointer_type &prev,
-			       const K &key, comparator cmp) const
+			       const K &key, const comparator &cmp) const
 	{
 		assert(level < prev->height());
 		persistent_node_ptr next = prev->next(level);

@@ -6,6 +6,7 @@
 
 #include <libpmemobj++/allocator.hpp>
 #include <libpmemobj++/detail/concurrent_skip_list_impl.hpp>
+#include <libpmemobj++/detail/integer_sequence.hpp>
 
 namespace pmem
 {
@@ -74,6 +75,16 @@ public:
 	 * Default constructor.
 	 */
 	concurrent_map() = default;
+
+	template <typename... Args1, typename... Args2>
+	explicit concurrent_map(std::piecewise_construct_t pc,
+				std::tuple<Args1...> compare_args,
+				std::tuple<Args2...> alloc_args)
+	    : base_type(pc, compare_args, alloc_args,
+			typename detail::make_index_sequence<Args1...>::type{},
+			typename detail::make_index_sequence<Args2...>::type{})
+	{
+	}
 
 	/**
 	 * Copy constructor.
