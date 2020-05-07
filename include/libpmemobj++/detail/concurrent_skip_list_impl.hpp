@@ -1716,8 +1716,8 @@ public:
 	 *
 	 * @return The associated allocator.
 	 */
-	allocator_type
-	get_allocator() const
+	allocator_type&
+	get_allocator()
 	{
 		return _node_allocator;
 	}
@@ -1864,13 +1864,12 @@ public:
 	}
 
 	/**
-	 * Returns the function object that compares the keys, which is a copy
-	 * of this container's constructor argument comp.
+	 * Returns reference to the function object that compares the keys.
 	 *
 	 * @return The key comparison function object.
 	 */
-	key_compare
-	key_comp() const
+	key_compare&
+	key_comp()
 	{
 		return _compare;
 	}
