@@ -1254,9 +1254,7 @@ public:
 	iterator
 	unsafe_erase(iterator pos)
 	{
-		check_outside_tx();
-		auto &size_diff = tls_data.local().size_diff;
-		return internal_erase(pos, size_diff);
+		return internal_erase(pos);
 	}
 
 	/**
@@ -1298,13 +1296,11 @@ public:
 	iterator
 	unsafe_erase(const_iterator first, const_iterator last)
 	{
-		check_outside_tx();
 		obj::pool_base pop = get_pool_base();
-		auto &size_diff = tls_data.local().size_diff;
 
 		obj::transaction::run(pop, [&] {
 			while (first != last) {
-				first = internal_erase(first, size_diff);
+				first = internal_erase(first);
 			}
 		});
 
@@ -2543,7 +2539,7 @@ private:
 	}
 
 	iterator
-	internal_erase(const_iterator pos, obj::p<difference_type> &size_diff)
+	internal_erase(const_iterator pos)
 	{
 		assert(pos != end());
 
@@ -2558,7 +2554,7 @@ private:
 			/* Make sure that node was extracted */
 			assert(extract_result.first != nullptr);
 			delete_node(extract_result.first);
-			--size_diff;
+			--on_init_size;
 			obj::transaction::snapshot((size_type *)&_size);
 			--_size;
 		});

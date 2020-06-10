@@ -109,15 +109,6 @@ test_tx_exception(nvobj::pool<root> &pop)
 			[&] { (void)map->try_emplace(key_type(0), 0); });
 
 		assert_tx_exception([&] { (void)map->try_emplace(0, 0); });
-
-		assert_tx_exception([&] { (void)map->unsafe_erase(0); });
-
-		assert_tx_exception(
-			[&] { (void)map->unsafe_erase(map->begin()); });
-
-		assert_tx_exception([&] {
-			(void)map->unsafe_erase(map->begin(), map->end());
-		});
 	});
 
 	pmem::obj::transaction::run(pop, [&] {
@@ -256,7 +247,7 @@ test_tx_singlethread(nvobj::pool<root> &pop)
 
 	verify_elements(pop, number_of_inserts);
 
-	auto test_value = 10;
+	const auto test_value = 10;
 	{
 		auto it = map->find(test_value);
 
@@ -285,6 +276,26 @@ test_tx_singlethread(nvobj::pool<root> &pop)
 	try {
 		pmem::obj::transaction::run(pop, [&] {
 			map->clear();
+			pmem::obj::transaction::abort(0);
+		});
+	} catch (pmem::manual_tx_abort &) {
+	} catch (...) {
+		UT_ASSERT(0);
+	}
+
+	try {
+		pmem::obj::transaction::run(pop, [&] {
+			auto it = map->find(test_value);
+			UT_ASSERT(it->second == test_value);
+			UT_ASSERTeq(map->count(test_value), 1);
+
+			auto ret = map->unsafe_erase(test_value);
+			UT_ASSERTeq(ret, 1);
+
+			it = map->find(test_value);
+			UT_ASSERT(it == map->end());
+			UT_ASSERTeq(map->count(test_value), 0);
+
 			pmem::obj::transaction::abort(0);
 		});
 	} catch (pmem::manual_tx_abort &) {
