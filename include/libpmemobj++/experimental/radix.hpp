@@ -10,8 +10,8 @@
 #include <libpmemobj++/make_persistent.hpp>
 #include <libpmemobj++/p.hpp>
 #include <libpmemobj++/pext.hpp>
-#include <libpmemobj++/transaction.hpp>
 #include <libpmemobj++/slice.hpp>
+#include <libpmemobj++/transaction.hpp>
 
 #include <libpmemobj/action_base.h>
 
@@ -30,13 +30,13 @@ namespace detail
 
 class inline_string {
 public:
-	inline_string(std::string_view str, char *data)
-	    : size_(str.size())
+	inline_string(std::string_view str, char *data) : size_(str.size())
 	{
 		std::memcpy(data, str.data(), size_);
 	}
 
-	obj::slice<char*> data(char *data_) const
+	obj::slice<char *>
+	data(char *data_) const
 	{
 		return {data_, data_ + size_};
 	}
@@ -51,48 +51,67 @@ namespace obj
 {
 
 template <class T, template <class...> class Template>
-struct is_specialization : std::false_type {};
+struct is_specialization : std::false_type {
+};
 
 template <template <class...> class Template, class... Args>
-struct is_specialization<Template<Args...>, Template> : std::true_type {};
+struct is_specialization<Template<Args...>, Template> : std::true_type {
+};
 
 // XXX - reimplement this pair
 template <typename Value>
-struct inline_pair : public detail::pair<detail::inline_string, Value>
-{
+struct inline_pair : public detail::pair<detail::inline_string, Value> {
 	using detail::pair<detail::inline_string, Value>::pair;
 	using detail::pair<detail::inline_string, Value>::first;
 	using detail::pair<detail::inline_string, Value>::second;
 
-	std::string_view key() {
-		auto r = first.data(reinterpret_cast<char*>(this + 1));
+	std::string_view
+	key()
+	{
+		auto r = first.data(reinterpret_cast<char *>(this + 1));
 		return {r.begin(), r.size()};
 	}
 
-	Value& value() {
+	Value &
+	value()
+	{
 		return second;
 	}
 };
 
-template <>
-struct inline_pair<detail::inline_string> : public detail::pair<detail::inline_string, detail::inline_string>
-{
-	using detail::pair<detail::inline_string, detail::inline_string>::pair;
-	using detail::pair<detail::inline_string, detail::inline_string>::first;
-	using detail::pair<detail::inline_string, detail::inline_string>::second;
+// template <>
+// struct inline_pair<detail::inline_string> : public
+// detail::pair<detail::inline_string, detail::inline_string>
+// {
+// 	using detail::pair<detail::inline_string, detail::inline_string>::pair;
+// 	using detail::pair<detail::inline_string, detail::inline_string>::first;
+// 	using detail::pair<detail::inline_string,
+// detail::inline_string>::second;
 
-	std::string_view key() {
-		auto r = first.data(reinterpret_cast<char*>(this + 1));
-		return {r.begin(), r.size()};
-	}
+// 	std::string_view key() {
+// 		auto r = first.data(reinterpret_cast<char*>(this + 1));
+// 		return {r.begin(), r.size()};
+// 	}
 
-	obj::slice<char*> value() {
-		return second.data(reinterpret_cast<char*>(this + 1) + key().size());
-	}
+// 	obj::slice<char*> value() {
+// 		return second.data(reinterpret_cast<char*>(this + 1) +
+// key().size());
+// 	}
+// };
+
+template <typename Value, typename Pointer>
+struct tree_leaf {
+	template <typename... Args>
+	tree_leaf(Args&&... args): data(std::forward<Args>(args)...)
+	{}
+
+	Pointer parent = nullptr;
+	Value data;
 };
 
 template <typename T, typename... Args>
-typename std::enable_if<is_specialization<T, inline_pair>::value, persistent_ptr<T>>::type
+typename std::enable_if<is_specialization<T, tree_leaf>::value,
+			persistent_ptr<T>>::type
 make_persistent(std::string_view k, Args &&... args)
 {
 	if (pmemobj_tx_stage() != TX_STAGE_WORK)
@@ -115,23 +134,26 @@ make_persistent(std::string_view k, Args &&... args)
 
 	auto k_dest = reinterpret_cast<char *>(ptr.get()) + sizeof(T);
 
-	new (ptr.get()) T(std::piecewise_construct,
-	 	std::forward_as_tuple(k, k_dest),
-	 	std::forward_as_tuple(std::forward<Args>(args)...));
+	new (ptr.get())
+		T(std::piecewise_construct, std::forward_as_tuple(k, k_dest),
+		  std::forward_as_tuple(std::forward<Args>(args)...));
 
 	return ptr;
 }
 
 // template <typename... Args>
 // persistent_ptr<inline_pair<detail::inline_string>>
-// make_persistent_inline<inline_pair<detail::inline_string>>(std::string_view k, std::string_view v)
+// make_persistent_inline<inline_pair<detail::inline_string>>(std::string_view
+// k, std::string_view v)
 // {
 // 	if (pmemobj_tx_stage() != TX_STAGE_WORK)
 // 		throw pmem::transaction_scope_error(
-// 			"refusing to allocate memory outside of transaction scope");
+// 			"refusing to allocate memory outside of transaction
+// scope");
 
-// 	persistent_ptr<inline_pair<detail::inline_string>> ptr = pmemobj_tx_xalloc(sizeof(inline_pair<detail::inline_string>) + k.size() + v.size(),
-// 						  detail::type_num<inline_pair<detail::inline_string>>(), 0);
+// 	persistent_ptr<inline_pair<detail::inline_string>> ptr =
+// pmemobj_tx_xalloc(sizeof(inline_pair<detail::inline_string>) + k.size() +
+// v.size(), 						  detail::type_num<inline_pair<detail::inline_string>>(), 0);
 
 // 	if (ptr == nullptr) {
 // 		if (errno == ENOMEM)
@@ -144,8 +166,8 @@ make_persistent(std::string_view k, Args &&... args)
 // 				.with_pmemobj_errormsg();
 // 	}
 
-// 	auto k_dest = reinterpret_cast<char *>(ptr.get()) + sizeof(inline_pair<detail::inline_string>);
-// 	auto v_dest = k_dest + k.size();
+// 	auto k_dest = reinterpret_cast<char *>(ptr.get()) +
+// sizeof(inline_pair<detail::inline_string>); 	auto v_dest = k_dest + k.size();
 // 	detail::create<inline_pair<detail::inline_string>, Args...>(
 // 		ptr.get(), std::piecewise_construct,
 // 		std::forward_as_tuple(k, k_dest),
@@ -166,53 +188,10 @@ using string_view = std::string_view;
  */
 template <typename Value>
 class radix_tree {
-public:
-	using key_type = detail::inline_string;
-	using mapped_type = Value;
-
-	// XXX key-type
-	using value_type = inline_pair<Value>;
-
-	// user value_type = 
-
-	// XXX
-	using iterator = value_type *;
-
-	/* Default ctor - constructs empty tree */
-	radix_tree();
-
-	/* Dtor - removes entire tree */
-	~radix_tree();
-
-	/*
-	 * insert -- write a key:value pair to the radix tree
-	 */
-	template <class... Args>
-	std::pair<iterator, bool> emplace(std::string_view k, Args &&... args);
-
-	/*
-	 * get -- query for a key ("==" match)
-	 */
-	bool get(string_view key);
-
-	/*
-	 * remove -- delete a key from the radit tree return true if element was
-	 * present
-	 */
-	bool remove(obj::pool_base &pop, string_view key);
-
-	// /*
-	//  * iterate -- iterate over all leafs
-	//  */
-	// void iterate(pmemkv_get_kv_callback *callback, void *arg);
-
-	/*
-	 * size -- return number of elements
-	 */
-	uint64_t size();
-
 private:
-	using leaf = value_type;
+	struct tagged_node_ptr;
+
+	using leaf = tree_leaf<inline_pair<Value>, tagged_node_ptr>;
 	struct node;
 
 	struct tagged_node_ptr {
@@ -265,10 +244,22 @@ private:
 	 * which is a prefix of some other leaf.
 	 */
 	struct node {
+		tagged_node_ptr leaf; // -> ptr<leaf>
 		tagged_node_ptr child[SLNODES];
-		tagged_node_ptr leaf = nullptr; // -> ptr<leaf>
+		tagged_node_ptr parent;
 		byten_t byte;
 		bitn_t bit;
+
+		tagged_node_ptr *
+		find_child(tagged_node_ptr ptr)
+		{
+			if (leaf == ptr)
+				return &leaf;
+
+			return std::find(child, child + SLNODES, ptr);
+
+			// return std::find(&leaf, child + SLNODES, ptr);
+		}
 
 		// uint8_t padding[256 - sizeof(mtx) - sizeof(child) -
 		// sizeof(byte) - 		sizeof(bit)];
@@ -276,6 +267,127 @@ private:
 
 	// static_assert(sizeof(node) == 256, "Wrong node size");
 
+public:
+	using key_type = detail::inline_string;
+	using mapped_type = Value;
+
+	// XXX key-type
+	using value_type = inline_pair<Value>;
+
+	// using user_value_type =
+	// std::pair<decltype(std::declval<inline_pair<Value>>().key()),
+	// decltype(std::declval<inline_pair<Value>>().value())>;
+	// XXX
+	// using iterator = user_value_type *;
+
+	struct iterator {
+		iterator(std::nullptr_t): node(nullptr)
+		{
+
+		}
+
+		iterator(tagged_node_ptr node) : node(node)
+		{
+		}
+
+		value_type *operator->()
+		{
+			return &(**this);
+		}
+
+		value_type &operator*()
+		{
+			if (node.is_leaf())
+				return node.get_leaf()->data;
+
+			return node->leaf.get_leaf()->data;
+		}
+
+		iterator
+		operator++()
+		{
+			node = next_node(node);
+			return *this;
+		}
+
+	private:
+		tagged_node_ptr node;
+
+		tagged_node_ptr
+		next_node(tagged_node_ptr n)
+		{
+			auto parent = node.is_leaf() ? node.get_leaf()->parent
+						     : node->parent;
+			auto *child_slot = parent->find_child(node);
+
+			do {
+				child_slot++;
+			} while (child_slot < &parent->child[SLNODES] &&
+				 !(*child_slot));
+
+			/* need to go up */
+			if (child_slot == &parent->child[SLNODES])
+				return next_node(parent); // recursinve XXX
+
+			return next_leaf(*child_slot);
+		}
+
+		tagged_node_ptr
+		next_leaf(tagged_node_ptr n)
+		{
+			if (n.is_leaf())
+				return n;
+
+			if (n->leaf)
+				return n->leaf;
+
+			for (size_t i = 0; i < SLNODES; i++) {
+				tagged_node_ptr m;
+				if ((m = n->child[i]))
+					return next_leaf(m);
+			}
+
+			/* there must be at least one leaf at the bottom */
+			assert(false);
+		}
+	};
+
+	/* Default ctor - constructs empty tree */
+	radix_tree();
+
+	/* Dtor - removes entire tree */
+	~radix_tree();
+
+	/*
+	 * insert -- write a key:value pair to the radix tree
+	 */
+	template <class... Args>
+	std::pair<iterator, bool> emplace(std::string_view k, Args &&... args);
+
+	iterator find(std::string_view k);
+
+	/*
+	 * get -- query for a key ("==" match)
+	 */
+	bool get(string_view key);
+
+	/*
+	 * remove -- delete a key from the radit tree return true if element was
+	 * present
+	 */
+	bool remove(obj::pool_base &pop, string_view key);
+
+	// /*
+	//  * iterate -- iterate over all leafs
+	//  */
+	// void iterate(pmemkv_get_kv_callback *callback, void *arg);
+
+	/*
+	 * size -- return number of elements
+	 */
+	uint64_t size();
+
+private:
 	int
 	n_child(tagged_node_ptr n)
 	{
@@ -292,20 +404,30 @@ private:
 
 	tagged_node_ptr root;
 	obj::p<uint64_t> size_;
-	uint64_t pool_id = 0;
+
+	tagged_node_ptr& parent_ref(tagged_node_ptr n)
+	{
+		if (n.is_leaf())
+			return n.get_leaf()->parent;
+
+		return n->parent;
+	}
 
 	template <typename... Args>
 	tagged_node_ptr
-	make_leaf(Args &&... args)
+	make_leaf(tagged_node_ptr parent, Args &&... args)
 	{
 		assert(pmemobj_tx_stage() == TX_STAGE_WORK);
 
 		size_++;
 
-		return make_persistent<leaf>(std::forward<Args>(args)...);
+		auto ptr = make_persistent<leaf>(std::forward<Args>(args)...);
+		ptr->parent = parent;
+
+		return ptr;
 	}
 
-	leaf *any_leaf(tagged_node_ptr n);
+	leaf *any_bottom_leaf(tagged_node_ptr n);
 	leaf *descend(string_view key);
 
 	bool
@@ -334,7 +456,7 @@ private:
 template <typename Value>
 radix_tree<Value>::radix_tree() : root(nullptr), size_(0)
 {
-	pool_id = pmemobj_oid(this).pool_uuid_lo;
+
 }
 
 template <typename Value>
@@ -352,19 +474,19 @@ radix_tree<Value>::size()
 }
 
 /*
- * any_leaf -- (internal) find any leaf in a subtree
+ * any_bottom_leaf -- (internal) find any leaf in a subtree
  *
  * We know they're all identical up to the divergence point between a prefix
  * shared by all of them vs the new key we're inserting.
  */
 template <typename Value>
 typename radix_tree<Value>::leaf *
-radix_tree<Value>::any_leaf(tagged_node_ptr n)
+radix_tree<Value>::any_bottom_leaf(tagged_node_ptr n)
 {
 	for (size_t i = 0; i < SLNODES; i++) {
 		tagged_node_ptr m;
 		if ((m = n.get_node()->child[i]))
-			return m.is_leaf() ? m.get_leaf() : any_leaf(m);
+			return m.is_leaf() ? m.get_leaf() : any_bottom_leaf(m);
 	}
 	assert(false);
 }
@@ -381,13 +503,13 @@ radix_tree<Value>::descend(string_view key)
 		if (nn)
 			n = nn;
 		else {
-			n = any_leaf(n);
+			n = any_bottom_leaf(n);
 			break;
 		}
 	}
 
 	if (!n.is_leaf())
-		n = any_leaf(n);
+		n = any_bottom_leaf(n);
 
 	return n.get_leaf();
 }
@@ -413,10 +535,10 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 
 	if (!root) {
 		obj::transaction::run(pop, [&] {
-			root = make_leaf(key, std::forward<Args>(args)...);
+			root = make_leaf(nullptr, key, std::forward<Args>(args)...);
 		});
 
-		return {root.get_leaf(), true};
+		return {root, true};
 	}
 
 	/*
@@ -425,18 +547,18 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 	 * long as the one common to the new key and that subtree.
 	 */
 	auto leaf = descend(key);
-	auto diff = prefix_diff(key, leaf->key());
+	auto diff = prefix_diff(key, leaf->data.key());
 
 	/* Descend into the tree again. */
 	auto n = root;
 	auto parent = &root;
 	auto prev = n;
 
-	auto min_key_len = std::min(leaf->key().size(), key.size());
+	auto min_key_len = std::min(leaf->data.key().size(), key.size());
 
 	bitn_t sh = 8 - SLICE;
-	if (diff < leaf->key().size() && diff < key.size()) {
-		auto at = static_cast<unsigned char>(leaf->key().data()[diff] ^
+	if (diff < leaf->data.key().size() && diff < key.size()) {
+		auto at = static_cast<unsigned char>(leaf->data.key().data()[diff] ^
 						     key.data()[diff]);
 		sh = detail::mssb_index((uint32_t)at) & (bitn_t) ~(SLICE - 1);
 	}
@@ -457,20 +579,19 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 	 * done.  Obviously this can't happen if SLICE == 1.
 	 */
 	if (!n) {
-		assert(diff < leaf->key().size() && diff < key.size());
+		assert(diff < leaf->data.key().size() && diff < key.size());
 
 		obj::transaction::run(pop, [&] {
-			*parent = make_leaf(key, std::forward<Args>(args)...);
+			*parent = make_leaf(prev, key, std::forward<Args>(args)...);
 		});
 
-		return {parent->get_leaf(), true};
+		return {*parent, true};
 	}
 
 	/* New key is a prefix of the leaf key or they are equal. We need to add
 	 * leaf ptr to internal node. */
 	if (diff == key.size()) {
-		if (n.is_leaf() &&
-		    n.get_leaf()->key().size() == key.size()) {
+		if (n.is_leaf() && n.get_leaf()->data.key().size() == key.size()) {
 			return {nullptr, false};
 		}
 
@@ -479,11 +600,11 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 				return {nullptr, false};
 
 			obj::transaction::run(pop, [&] {
-				n->leaf =
-					make_leaf(key, std::forward<Args>(args)...);
+				n->leaf = make_leaf(n,
+					key, std::forward<Args>(args)...);
 			});
 
-			return {n->leaf.get_leaf(), true};
+			return {n->leaf, true};
 		}
 
 		tagged_node_ptr node;
@@ -491,19 +612,23 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 			/* We have to add new node at the edge from parent to n
 			 */
 			node = obj::make_persistent<radix_tree::node>();
-			node->child[slice_index(leaf->key().data()[diff], sh)] =
+			node->leaf =
+				make_leaf(node, key, std::forward<Args>(args)...);
+			node->child[slice_index(leaf->data.key().data()[diff], sh)] =
 				n;
-			node->leaf = make_leaf(key, std::forward<Args>(args)...);
+			node->parent = parent_ref(n);
 			node->byte = diff;
 			node->bit = sh;
+
+			parent_ref(n) = node;
 
 			*parent = node;
 		});
 
-		return {node->leaf.get_leaf(), true};
+		return {node->leaf, true};
 	}
 
-	if (diff == leaf->key().size()) {
+	if (diff == leaf->data.key().size()) {
 		/* Leaf key is a prefix of the new key. We need to convert leaf
 		 * to a node.
 		 */
@@ -512,40 +637,44 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 			/* We have to add new node at the edge from parent to n
 			 */
 			node = obj::make_persistent<radix_tree::node>();
-			node->child[slice_index(key.data()[diff], sh)] =
-				make_leaf(key, std::forward<Args>(args)...);
 			node->leaf = n;
+			node->child[slice_index(key.data()[diff], sh)] =
+				make_leaf(node, key, std::forward<Args>(args)...);
+			node->parent = parent_ref(n);
 			node->byte = diff;
 			node->bit = sh;
+
+			parent_ref(n) = node;
 
 			*parent = node;
 		});
 
-		return {node->child[slice_index(key.data()[diff], sh)]
-				.get_leaf(),
-			true};
+		return {node->child[slice_index(key.data()[diff], sh)],true};
 	}
 
 	tagged_node_ptr node;
 	obj::transaction::run(pop, [&] {
 		/* We have to add new node at the edge from parent to n */
 		node = obj::make_persistent<radix_tree::node>();
-		node->child[slice_index(leaf->key().data()[diff], sh)] = n;
+		node->child[slice_index(leaf->data.key().data()[diff], sh)] = n;
 		node->child[slice_index(key.data()[diff], sh)] =
-			make_leaf(key, std::forward<Args>(args)...);
+			make_leaf(node, key, std::forward<Args>(args)...);
+		node->parent = parent_ref(n);
 		node->byte = diff;
 		node->bit = sh;
+
+		parent_ref(n) = node;
 
 		*parent = node;
 	});
 
-	return {node->child[slice_index(key.data()[diff], sh)].get_leaf(),
+	return {node->child[slice_index(key.data()[diff], sh)],
 		true};
 }
 
 template <typename Value>
-bool
-radix_tree<Value>::get(string_view key)
+typename radix_tree<Value>::iterator
+radix_tree<Value>::find(std::string_view key)
 {
 	auto n = root;
 	auto prev = n;
@@ -554,21 +683,18 @@ radix_tree<Value>::get(string_view key)
 		if (n->byte == key.size() && n->bit == 4)
 			n = n->leaf;
 		else if (n->byte > key.size())
-			return false;
+			return nullptr;
 		else
 			n = n->child[slice_index(key.data()[n->byte], n->bit)];
 	}
 
 	if (!n)
-		return false;
+		return nullptr;
 
-	auto leaf = n.get_leaf();
-	if (key.compare(leaf->key()) != 0)
-		return false;
+	if (key.compare(n.get_leaf()->data.key()) != 0)
+		return nullptr;
 
-	// cb(leaf->data(), leaf->value.size(), arg);
-
-	return true;
+	return n;
 }
 
 template <typename Value>
@@ -597,7 +723,7 @@ radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
 		return false;
 
 	auto leaf = n.get_leaf();
-	if (!keys_equal(key, leaf->key()))
+	if (!keys_equal(key, leaf->data.key()))
 		return false;
 
 	obj::transaction::run(pop, [&] {
@@ -630,6 +756,7 @@ radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
 
 		assert(only_child);
 
+		only_child->parent = n->parent;
 		obj::delete_persistent<radix_tree::node>(n.get_node());
 		*pp = only_child;
 	});
@@ -652,7 +779,7 @@ radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
 // 		}
 // 	} else {
 // 		auto leaf = n.get_leaf();
-// 		callback(leaf->key().data(), leaf->key().size(), leaf->data(),
+// 		callback(leaf->data.key().data(), leaf->data.key().size(), leaf->data(),
 // 			 leaf->value.size(), arg);
 // 	}
 // }
