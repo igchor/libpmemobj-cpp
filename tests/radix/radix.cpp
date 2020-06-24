@@ -24,8 +24,24 @@ test_emplace(nvobj::pool<root> &pop)
 
 	nvobj::transaction::run(pop, [&] {
 		r->radix = nvobj::make_persistent<container>();
-		r->radix->emplace("k1", 10);	
+		r->radix->emplace("", 0);
+		r->radix->emplace("ab", 1);
+		r->radix->emplace("ba", 2);
+		r->radix->emplace("a", 3);
+		r->radix->emplace("b", 4);
 	});
+
+	auto it = r->radix->find("a");
+	UT_ASSERTeq(it->second, 3);
+
+	++it;
+	UT_ASSERTeq(it->second, 1);
+
+	++it;
+	UT_ASSERTeq(it->second, 4);
+
+	++it;
+	UT_ASSERTeq(it->second, 2);
 }
 }
 
