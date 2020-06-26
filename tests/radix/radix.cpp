@@ -32,16 +32,19 @@ test_emplace(nvobj::pool<root> &pop)
 	});
 
 	auto it = r->radix->find("a");
-	UT_ASSERTeq(it->second, 3);
+	UT_ASSERT(it.key() == std::string("a"));
+	UT_ASSERTeq(it.value(), 3);
 
 	++it;
-	UT_ASSERTeq(it->second, 1);
+	UT_ASSERTeq(it.value(), 1);
 
 	++it;
-	UT_ASSERTeq(it->second, 4);
+	UT_ASSERTeq(it.value(), 4);
 
 	++it;
-	UT_ASSERTeq(it->second, 2);
+	UT_ASSERTeq(it.value(), 2);
+
+	++it;
 }
 }
 
@@ -62,7 +65,13 @@ test(int argc, char *argv[])
 		UT_FATAL("!pool::create: %s %s", pe.what(), path);
 	}
 
+	std::cout << "digraph Radix {" << std::endl;
+
 	test_emplace(pop);
+
+	pop.root()->radix->iterate();
+
+	std::cout << "}" << std::endl;
 
 	pop.close();
 }
