@@ -36,15 +36,32 @@ test_emplace(nvobj::pool<root> &pop)
 	UT_ASSERTeq(it.value(), 3);
 
 	++it;
+	UT_ASSERT(it.key() == std::string("ab"));
 	UT_ASSERTeq(it.value(), 1);
 
 	++it;
+	UT_ASSERT(it.key() == std::string("b"));
 	UT_ASSERTeq(it.value(), 4);
 
 	++it;
+	UT_ASSERT(it.key() == std::string("ba"));
 	UT_ASSERTeq(it.value(), 2);
 
-	++it;
+	--it;
+	UT_ASSERT(it.key() == std::string("b"));
+	UT_ASSERTeq(it.value(), 4);
+
+	--it;
+	UT_ASSERT(it.key() == std::string("ab"));
+	UT_ASSERTeq(it.value(), 1);
+
+	--it;
+	UT_ASSERT(it.key() == std::string("a"));
+	UT_ASSERTeq(it.value(), 3);
+
+	--it;
+	UT_ASSERT(it.key() == std::string(""));
+	UT_ASSERTeq(it.value(), 0);
 }
 }
 

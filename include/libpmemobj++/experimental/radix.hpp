@@ -246,21 +246,101 @@ private:
 	 * which is a prefix of some other leaf.
 	 */
 	struct node {
+		tagged_node_ptr parent;
 		tagged_node_ptr leaf; // -> ptr<leaf>
 		tagged_node_ptr child[SLNODES];
-		tagged_node_ptr parent;
 		byten_t byte;
 		bitn_t bit;
 
-		tagged_node_ptr *
+		struct forward_iterator {
+			forward_iterator(tagged_node_ptr *ptr) : ptr(ptr)
+			{
+			}
+
+			forward_iterator
+			operator++()
+			{
+				ptr++;
+				return *this;
+			}
+
+			operator tagged_node_ptr *()
+			{
+				return ptr;
+			}
+
+		private:
+			tagged_node_ptr *ptr;
+		};
+
+		struct reverse_iterator {
+			reverse_iterator(tagged_node_ptr *ptr) : ptr(ptr)
+			{
+			}
+
+			reverse_iterator
+			operator++()
+			{
+				ptr--;
+				return *this;
+			}
+
+			operator tagged_node_ptr *()
+			{
+				return ptr;
+			}
+
+		private:
+			tagged_node_ptr *ptr;
+		};
+
+		template <typename Iterator>
+		Iterator
 		find_child(tagged_node_ptr ptr)
 		{
 			if (leaf == ptr)
 				return &leaf;
 
-			return std::find(child, child + SLNODES, ptr);
-
+			return Iterator(std::find(child, child + SLNODES, ptr));
 			// return std::find(&leaf, child + SLNODES, ptr);
+		}
+
+		template <typename Iterator>
+		typename std::enable_if<
+			std::is_same<Iterator, forward_iterator>::value,
+			Iterator>::type
+		begin()
+		{
+			return Iterator(&leaf);
+		}
+
+		template <typename Iterator>
+		typename std::enable_if<
+			std::is_same<Iterator, forward_iterator>::value,
+			Iterator>::type
+		end()
+		{
+			return Iterator(&child[SLNODES]);
+		}
+
+		/* rbegin */
+		template <typename Iterator>
+		typename std::enable_if<
+			std::is_same<Iterator, reverse_iterator>::value,
+			Iterator>::type
+		begin()
+		{
+			return Iterator(&child[SLNODES - 1]);
+		}
+
+		/* rend */
+		template <typename Iterator>
+		typename std::enable_if<
+			std::is_same<Iterator, reverse_iterator>::value,
+			Iterator>::type
+		end()
+		{
+			return Iterator(&leaf - 1);
 		}
 
 		// uint8_t padding[256 - sizeof(mtx) - sizeof(child) -
@@ -319,52 +399,70 @@ public:
 		iterator
 		operator++()
 		{
-			node = next_node(node);
+			if (node)
+				node = next_node<
+					typename node::forward_iterator>(node);
+
+			return *this;
+		}
+
+		iterator
+		operator--()
+		{
+			if (node)
+				node = next_node<
+					typename node::reverse_iterator>(node);
+
 			return *this;
 		}
 
 	private:
 		tagged_node_ptr node;
 
+		template <typename ChildIterator>
 		static tagged_node_ptr
 		next_node(tagged_node_ptr n)
 		{
+			/* It must be dereferenceable. */
+			assert(n);
+
 			auto parent =
 				n.is_leaf() ? n.get_leaf()->parent : n->parent;
 
 			if (!parent)
-				return nullptr; // end();
+				return nullptr; // XXX: return rightmost leaf?
 
-			auto *child_slot = parent->find_child(n);
+			auto child_slot =
+				parent->template find_child<ChildIterator>(n);
 
 			do {
-				child_slot++;
-			} while (child_slot < &parent->child[SLNODES] &&
-				 !(*child_slot));
+				++child_slot;
+			} while (
+				child_slot !=
+					parent->template end<ChildIterator>() &&
+				!(*child_slot));
 
-			/* need to go up */
-			if (child_slot == &parent->child[SLNODES])
-				return next_node(parent);
+			/* No more childeren on this level, need to go up. */
+			if (child_slot == parent->template end<ChildIterator>())
+				return next_node<ChildIterator>(parent);
 
-			return next_leaf(*child_slot);
+			return next_leaf<ChildIterator>(*child_slot);
 		}
 
+		template <typename ChildIterator>
 		static tagged_node_ptr
 		next_leaf(tagged_node_ptr n)
 		{
 			if (n.is_leaf())
 				return n;
 
-			if (n->leaf)
-				return n->leaf;
-
-			for (size_t i = 0; i < SLNODES; i++) {
-				tagged_node_ptr m;
-				if ((m = n->child[i]))
-					return next_leaf(m);
+			for (auto it = n->template begin<ChildIterator>();
+			     it != n->template end<ChildIterator>(); ++it) {
+				if (*it)
+					return next_leaf<ChildIterator>(*it);
 			}
 
-			/* there must be at least one leaf at the bottom */
+			/* There must be at least one leaf at the bottom. */
 			assert(false);
 		}
 	};
@@ -393,6 +491,9 @@ public:
 	 * present
 	 */
 	bool remove(obj::pool_base &pop, string_view key);
+
+	iterator begin();
+	iterator end();
 
 	/*
 	 * iterate -- iterate over all leafs
@@ -446,8 +547,31 @@ private:
 		return ptr;
 	}
 
-	leaf *any_bottom_leaf(tagged_node_ptr n);
-	leaf *descend(string_view key);
+	leaf *leftmost_leaf(tagged_node_ptr n);
+	leaf *rightmost_leaf(tagged_node_ptr n);
+
+	leaf *
+	descend(string_view key)
+	{
+		auto n = root;
+
+		while (!n.is_leaf() && n->byte < key.size()) {
+			auto nn = n->child[slice_index(key.data()[n->byte],
+						       n->bit)];
+
+			if (nn)
+				n = nn;
+			else {
+				n = leftmost_leaf(n);
+				break;
+			}
+		}
+
+		if (!n.is_leaf())
+			n = leftmost_leaf(n);
+
+		return n.get_leaf();
+	}
 
 	bool
 	keys_equal(string_view k1, string_view k2)
@@ -499,37 +623,26 @@ radix_tree<Value>::size()
  */
 template <typename Value>
 typename radix_tree<Value>::leaf *
-radix_tree<Value>::any_bottom_leaf(tagged_node_ptr n)
+radix_tree<Value>::leftmost_leaf(tagged_node_ptr n)
 {
 	for (size_t i = 0; i < SLNODES; i++) {
 		tagged_node_ptr m;
 		if ((m = n.get_node()->child[i]))
-			return m.is_leaf() ? m.get_leaf() : any_bottom_leaf(m);
+			return m.is_leaf() ? m.get_leaf() : leftmost_leaf(m);
 	}
 	assert(false);
 }
 
 template <typename Value>
 typename radix_tree<Value>::leaf *
-radix_tree<Value>::descend(string_view key)
+radix_tree<Value>::rightmost_leaf(tagged_node_ptr n)
 {
-	auto n = root;
-
-	while (!n.is_leaf() && n->byte < key.size()) {
-		auto nn = n->child[slice_index(key.data()[n->byte], n->bit)];
-
-		if (nn)
-			n = nn;
-		else {
-			n = any_bottom_leaf(n);
-			break;
-		}
+	for (size_t i = SLNODES; i > 0; i--) {
+		tagged_node_ptr m;
+		if ((m = n.get_node()->child[i - 1]))
+			return m.is_leaf() ? m.get_leaf() : rightmost_leaf(m);
 	}
-
-	if (!n.is_leaf())
-		n = any_bottom_leaf(n);
-
-	return n.get_leaf();
+	assert(false);
 }
 
 static inline byten_t
@@ -783,6 +896,32 @@ radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
 	});
 
 	return true;
+}
+
+template <typename Value>
+typename radix_tree<Value>::iterator
+radix_tree<Value>::begin()
+{
+	if (!root)
+		return nullptr;
+
+	if (root.is_leaf())
+		return root;
+
+	return leftmost_leaf(root);
+}
+
+template <typename Value>
+typename radix_tree<Value>::iterator
+radix_tree<Value>::end()
+{
+	if (!root)
+		return nullptr;
+
+	if (root.is_leaf())
+		return root + 1;
+
+	return rightmost_leaf(root);
 }
 
 template <typename Value>
