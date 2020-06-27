@@ -243,35 +243,16 @@ private:
 	 * root is a multiple of byte (n->bit == 8 - SLICE).
 	 *
 	 * This ptr stores pointer to a leaf
-	 * which is a prefix of some other leaf.
+	 * which is a prefix of some other (bottom) leaf.
 	 */
 	struct node {
 		tagged_node_ptr parent;
-		tagged_node_ptr leaf; // -> ptr<leaf>
+		tagged_node_ptr leaf;
 		tagged_node_ptr child[SLNODES];
 		byten_t byte;
 		bitn_t bit;
 
-		struct forward_iterator {
-			forward_iterator(tagged_node_ptr *ptr) : ptr(ptr)
-			{
-			}
-
-			forward_iterator
-			operator++()
-			{
-				ptr++;
-				return *this;
-			}
-
-			operator tagged_node_ptr *()
-			{
-				return ptr;
-			}
-
-		private:
-			tagged_node_ptr *ptr;
-		};
+		using forward_iterator = tagged_node_ptr *;
 
 		struct reverse_iterator {
 			reverse_iterator(tagged_node_ptr *ptr) : ptr(ptr)
@@ -298,11 +279,8 @@ private:
 		Iterator
 		find_child(tagged_node_ptr ptr)
 		{
-			if (leaf == ptr)
-				return &leaf;
-
-			return Iterator(std::find(child, child + SLNODES, ptr));
-			// return std::find(&leaf, child + SLNODES, ptr);
+			// XXX: UB
+			return Iterator(std::find(&leaf, std::end(child), ptr));
 		}
 
 		template <typename Iterator>
@@ -547,8 +525,8 @@ private:
 		return ptr;
 	}
 
-	leaf *leftmost_leaf(tagged_node_ptr n);
-	leaf *rightmost_leaf(tagged_node_ptr n);
+	template <typename ChildIterator>
+	leaf *bottom_leaf(tagged_node_ptr n);
 
 	leaf *
 	descend(string_view key)
@@ -562,13 +540,14 @@ private:
 			if (nn)
 				n = nn;
 			else {
-				n = leftmost_leaf(n);
+				n = bottom_leaf<
+					typename node::forward_iterator>(n);
 				break;
 			}
 		}
 
 		if (!n.is_leaf())
-			n = leftmost_leaf(n);
+			n = bottom_leaf<typename node::forward_iterator>(n);
 
 		return n.get_leaf();
 	}
@@ -615,33 +594,20 @@ radix_tree<Value>::size()
 	return this->size_;
 }
 
-/*
- * any_bottom_leaf -- (internal) find any leaf in a subtree
- *
- * We know they're all identical up to the divergence point between a prefix
- * shared by all of them vs the new key we're inserting.
+/**
+ * Find a bottom (either leftmost or rightmost) leaf in a subtree.
  */
 template <typename Value>
+template <typename ChildIterator>
 typename radix_tree<Value>::leaf *
-radix_tree<Value>::leftmost_leaf(tagged_node_ptr n)
+radix_tree<Value>::bottom_leaf(typename radix_tree<Value>::tagged_node_ptr n)
 {
-	for (size_t i = 0; i < SLNODES; i++) {
-		tagged_node_ptr m;
-		if ((m = n.get_node()->child[i]))
-			return m.is_leaf() ? m.get_leaf() : leftmost_leaf(m);
-	}
-	assert(false);
-}
+	for (auto it = n->template begin<ChildIterator>();
+	     it != n->template end<ChildIterator>(); it++)
+		if (*it)
+			return it->is_leaf() ? it->get_leaf()
+					     : bottom_leaf<ChildIterator>(*it);
 
-template <typename Value>
-typename radix_tree<Value>::leaf *
-radix_tree<Value>::rightmost_leaf(tagged_node_ptr n)
-{
-	for (size_t i = SLNODES; i > 0; i--) {
-		tagged_node_ptr m;
-		if ((m = n.get_node()->child[i - 1]))
-			return m.is_leaf() ? m.get_leaf() : rightmost_leaf(m);
-	}
 	assert(false);
 }
 
@@ -908,7 +874,7 @@ radix_tree<Value>::begin()
 	if (root.is_leaf())
 		return root;
 
-	return leftmost_leaf(root);
+	return bottom_leaf<typename node::forward_iterator>(root);
 }
 
 template <typename Value>
@@ -921,7 +887,7 @@ radix_tree<Value>::end()
 	if (root.is_leaf())
 		return root + 1;
 
-	return rightmost_leaf(root);
+	return bottom_leaf<typename node::reverse_iterator>(root);
 }
 
 template <typename Value>
