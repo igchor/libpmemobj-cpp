@@ -62,6 +62,10 @@ test_emplace(nvobj::pool<root> &pop)
 	--it;
 	UT_ASSERT(it.key() == std::string(""));
 	UT_ASSERTeq(it.value(), 0);
+
+	it = r->radix->erase(it);
+	UT_ASSERT(it.key() == std::string("a"));
+	UT_ASSERTeq(it.value(), 3);
 }
 }
 

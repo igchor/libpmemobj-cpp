@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <libpmemobj++/detail/pair.hpp>
+#include <libpmemobj++/string_view.hpp>
 
 namespace pmem
 {
@@ -30,7 +31,7 @@ namespace detail
 
 class inline_string {
 public:
-	inline_string(std::string_view str, char *data) : size_(str.size())
+	inline_string(obj::string_view str, char *data) : size_(str.size())
 	{
 		std::memcpy(data, str.data(), size_);
 	}
@@ -65,7 +66,7 @@ struct inline_pair : public detail::pair<detail::inline_string, Value> {
 	using detail::pair<detail::inline_string, Value>::first;
 	using detail::pair<detail::inline_string, Value>::second;
 
-	std::string_view
+	obj::string_view
 	key()
 	{
 		auto r = first.data(reinterpret_cast<char *>(this + 1));
@@ -78,26 +79,6 @@ struct inline_pair : public detail::pair<detail::inline_string, Value> {
 		return second;
 	}
 };
-
-// template <>
-// struct inline_pair<detail::inline_string> : public
-// detail::pair<detail::inline_string, detail::inline_string>
-// {
-// 	using detail::pair<detail::inline_string, detail::inline_string>::pair;
-// 	using detail::pair<detail::inline_string, detail::inline_string>::first;
-// 	using detail::pair<detail::inline_string,
-// detail::inline_string>::second;
-
-// 	std::string_view key() {
-// 		auto r = first.data(reinterpret_cast<char*>(this + 1));
-// 		return {r.begin(), r.size()};
-// 	}
-
-// 	obj::slice<char*> value() {
-// 		return second.data(reinterpret_cast<char*>(this + 1) +
-// key().size());
-// 	}
-// };
 
 template <typename Value, typename Pointer>
 struct tree_leaf {
@@ -113,7 +94,7 @@ struct tree_leaf {
 template <typename T, typename... Args>
 typename std::enable_if<is_specialization<T, tree_leaf>::value,
 			persistent_ptr<T>>::type
-make_persistent(std::string_view k, Args &&... args)
+make_persistent(obj::string_view k, Args &&... args)
 {
 	if (pmemobj_tx_stage() != TX_STAGE_WORK)
 		throw pmem::transaction_scope_error(
@@ -142,40 +123,6 @@ make_persistent(std::string_view k, Args &&... args)
 	return ptr;
 }
 
-// template <typename... Args>
-// persistent_ptr<inline_pair<detail::inline_string>>
-// make_persistent_inline<inline_pair<detail::inline_string>>(std::string_view
-// k, std::string_view v)
-// {
-// 	if (pmemobj_tx_stage() != TX_STAGE_WORK)
-// 		throw pmem::transaction_scope_error(
-// 			"refusing to allocate memory outside of transaction
-// scope");
-
-// 	persistent_ptr<inline_pair<detail::inline_string>> ptr =
-// pmemobj_tx_xalloc(sizeof(inline_pair<detail::inline_string>) + k.size() +
-// v.size(),
-// detail::type_num<inline_pair<detail::inline_string>>(), 0);
-
-// 	if (ptr == nullptr) {
-// 		if (errno == ENOMEM)
-// 			throw pmem::transaction_out_of_memory(
-// 				"Failed to allocate persistent memory object")
-// 				.with_pmemobj_errormsg();
-// 		else
-// 			throw pmem::transaction_alloc_error(
-// 				"Failed to allocate persistent memory object")
-// 				.with_pmemobj_errormsg();
-// 	}
-
-// 	auto k_dest = reinterpret_cast<char *>(ptr.get()) +
-// sizeof(inline_pair<detail::inline_string>); 	auto v_dest = k_dest + k.size();
-// 	detail::create<inline_pair<detail::inline_string>, Args...>(
-// 		ptr.get(), std::piecewise_construct,
-// 		std::forward_as_tuple(k, k_dest),
-// 		std::forward_as_tuple(v, v_dest));
-// }
-
 static constexpr std::size_t SLICE = 4;
 static constexpr std::size_t NIB = ((1ULL << SLICE) - 1);
 static constexpr std::size_t SLNODES = (1 << SLICE);
@@ -183,7 +130,7 @@ static constexpr std::size_t SLNODES = (1 << SLICE);
 using byten_t = uint32_t;
 using bitn_t = uint8_t;
 
-using string_view = std::string_view;
+using string_view = obj::string_view;
 
 /**
  * Based on: https://github.com/pmem/pmdk/blob/master/src/libpmemobj/critnib.h
@@ -192,138 +139,9 @@ template <typename Value>
 class radix_tree {
 private:
 	struct tagged_node_ptr;
-
-	using leaf = tree_leaf<inline_pair<Value>, tagged_node_ptr>;
 	struct node;
 
-	struct tagged_node_ptr {
-		tagged_node_ptr();
-		tagged_node_ptr(const tagged_node_ptr &rhs);
-		tagged_node_ptr(std::nullptr_t);
-
-		tagged_node_ptr(const obj::persistent_ptr<leaf> &ptr);
-		tagged_node_ptr(const obj::persistent_ptr<node> &ptr);
-
-		tagged_node_ptr &operator=(const tagged_node_ptr &rhs);
-		tagged_node_ptr &operator=(std::nullptr_t);
-		tagged_node_ptr &
-		operator=(const obj::persistent_ptr<leaf> &rhs);
-		tagged_node_ptr &
-		operator=(const obj::persistent_ptr<node> &rhs);
-
-		bool operator==(const tagged_node_ptr &rhs) const;
-		bool operator!=(const tagged_node_ptr &rhs) const;
-
-		bool is_leaf() const;
-
-		radix_tree::leaf *get_leaf() const;
-		radix_tree::node *get_node() const;
-
-		radix_tree::node *operator->() const noexcept;
-
-		explicit operator bool() const noexcept;
-
-	private:
-		template <typename T>
-		T
-		get() const noexcept
-		{
-			auto s = reinterpret_cast<T>(
-				reinterpret_cast<uint64_t>(this) +
-				(off & ~uint64_t(1)));
-			return s;
-		}
-
-		obj::p<uint64_t> off;
-	};
-
-	/*
-	 * Internal nodes store SLNODES children ptrs + one leaf ptr.
-	 * The leaf ptr is used only for nodes for which length of the path from
-	 * root is a multiple of byte (n->bit == 8 - SLICE).
-	 *
-	 * This ptr stores pointer to a leaf
-	 * which is a prefix of some other (bottom) leaf.
-	 */
-	struct node {
-		tagged_node_ptr parent;
-		tagged_node_ptr leaf;
-		tagged_node_ptr child[SLNODES];
-		byten_t byte;
-		bitn_t bit;
-
-		using forward_iterator = tagged_node_ptr *;
-
-		struct reverse_iterator {
-			reverse_iterator(tagged_node_ptr *ptr) : ptr(ptr)
-			{
-			}
-
-			reverse_iterator
-			operator++()
-			{
-				ptr--;
-				return *this;
-			}
-
-			operator tagged_node_ptr *()
-			{
-				return ptr;
-			}
-
-		private:
-			tagged_node_ptr *ptr;
-		};
-
-		template <typename Iterator>
-		Iterator
-		find_child(tagged_node_ptr ptr)
-		{
-			// XXX: UB
-			return Iterator(std::find(&leaf, std::end(child), ptr));
-		}
-
-		template <typename Iterator>
-		typename std::enable_if<
-			std::is_same<Iterator, forward_iterator>::value,
-			Iterator>::type
-		begin()
-		{
-			return Iterator(&leaf);
-		}
-
-		template <typename Iterator>
-		typename std::enable_if<
-			std::is_same<Iterator, forward_iterator>::value,
-			Iterator>::type
-		end()
-		{
-			return Iterator(&child[SLNODES]);
-		}
-
-		/* rbegin */
-		template <typename Iterator>
-		typename std::enable_if<
-			std::is_same<Iterator, reverse_iterator>::value,
-			Iterator>::type
-		begin()
-		{
-			return Iterator(&child[SLNODES - 1]);
-		}
-
-		/* rend */
-		template <typename Iterator>
-		typename std::enable_if<
-			std::is_same<Iterator, reverse_iterator>::value,
-			Iterator>::type
-		end()
-		{
-			return Iterator(&leaf - 1);
-		}
-
-		// uint8_t padding[256 - sizeof(mtx) - sizeof(child) -
-		// sizeof(byte) - 		sizeof(bit)];
-	};
+	using leaf = tree_leaf<inline_pair<Value>, tagged_node_ptr>;
 
 	// static_assert(sizeof(node) == 256, "Wrong node size");
 
@@ -340,110 +158,7 @@ public:
 	// XXX
 	// using iterator = user_value_type *;
 
-	struct iterator {
-		using value_type = std::pair<string_view, Value &>;
-
-		iterator(std::nullptr_t) : node(nullptr)
-		{
-		}
-
-		iterator(tagged_node_ptr node) : node(node)
-		{
-		}
-
-		value_type operator*()
-		{
-			leaf *leaf_ptr;
-			if (node.is_leaf())
-				leaf_ptr = node.get_leaf();
-			else
-				leaf_ptr = node->leaf.get_leaf();
-
-			return {leaf_ptr->data.key(), leaf_ptr->data.value()};
-		}
-
-		string_view
-		key()
-		{
-			return (**this).first;
-		}
-
-		Value &
-		value()
-		{
-			return (**this).second;
-		}
-
-		iterator
-		operator++()
-		{
-			if (node)
-				node = next_node<
-					typename node::forward_iterator>(node);
-
-			return *this;
-		}
-
-		iterator
-		operator--()
-		{
-			if (node)
-				node = next_node<
-					typename node::reverse_iterator>(node);
-
-			return *this;
-		}
-
-	private:
-		tagged_node_ptr node;
-
-		template <typename ChildIterator>
-		static tagged_node_ptr
-		next_node(tagged_node_ptr n)
-		{
-			/* It must be dereferenceable. */
-			assert(n);
-
-			auto parent =
-				n.is_leaf() ? n.get_leaf()->parent : n->parent;
-
-			if (!parent)
-				return nullptr; // XXX: return rightmost leaf?
-
-			auto child_slot =
-				parent->template find_child<ChildIterator>(n);
-
-			do {
-				++child_slot;
-			} while (
-				child_slot !=
-					parent->template end<ChildIterator>() &&
-				!(*child_slot));
-
-			/* No more childeren on this level, need to go up. */
-			if (child_slot == parent->template end<ChildIterator>())
-				return next_node<ChildIterator>(parent);
-
-			return next_leaf<ChildIterator>(*child_slot);
-		}
-
-		template <typename ChildIterator>
-		static tagged_node_ptr
-		next_leaf(tagged_node_ptr n)
-		{
-			if (n.is_leaf())
-				return n;
-
-			for (auto it = n->template begin<ChildIterator>();
-			     it != n->template end<ChildIterator>(); ++it) {
-				if (*it)
-					return next_leaf<ChildIterator>(*it);
-			}
-
-			/* There must be at least one leaf at the bottom. */
-			assert(false);
-		}
-	};
+	struct iterator;
 
 	/* Default ctor - constructs empty tree */
 	radix_tree();
@@ -451,24 +166,12 @@ public:
 	/* Dtor - removes entire tree */
 	~radix_tree();
 
-	/*
-	 * insert -- write a key:value pair to the radix tree
-	 */
 	template <class... Args>
-	std::pair<iterator, bool> emplace(std::string_view k, Args &&... args);
+	std::pair<iterator, bool> emplace(obj::string_view k, Args &&... args);
 
-	iterator find(std::string_view k);
+	iterator find(obj::string_view k);
 
-	/*
-	 * get -- query for a key ("==" match)
-	 */
-	bool get(string_view key);
-
-	/*
-	 * remove -- delete a key from the radit tree return true if element was
-	 * present
-	 */
-	bool remove(obj::pool_base &pop, string_view key);
+	iterator erase(iterator pos);
 
 	iterator begin();
 	iterator end();
@@ -477,7 +180,6 @@ public:
 	 * iterate -- iterate over all leafs
 	 */
 	void iterate();
-	void iterate_rec(tagged_node_ptr n);
 
 	/*
 	 * size -- return number of elements
@@ -485,94 +187,188 @@ public:
 	uint64_t size();
 
 private:
-	int
-	n_child(tagged_node_ptr n)
-	{
-		int num = 0;
-		for (int i = 0; i < (int)SLNODES; i++) {
-			auto &child = n->child[i];
-			if (child) {
-				num++;
-			}
-		}
-
-		return num;
-	}
-
 	tagged_node_ptr root;
 	obj::p<uint64_t> size_;
 
-	tagged_node_ptr &
-	parent_ref(tagged_node_ptr n)
-	{
-		if (n.is_leaf())
-			return n.get_leaf()->parent;
+	int n_child(tagged_node_ptr n);
 
-		return n->parent;
-	}
+	tagged_node_ptr &parent_ref(tagged_node_ptr n);
 
 	template <typename... Args>
-	tagged_node_ptr
-	make_leaf(tagged_node_ptr parent, Args &&... args)
-	{
-		assert(pmemobj_tx_stage() == TX_STAGE_WORK);
-
-		size_++;
-
-		auto ptr = make_persistent<leaf>(std::forward<Args>(args)...);
-		ptr->parent = parent;
-
-		return ptr;
-	}
+	tagged_node_ptr make_leaf(tagged_node_ptr parent, Args &&... args);
 
 	template <typename ChildIterator>
 	leaf *bottom_leaf(tagged_node_ptr n);
 
-	leaf *
-	descend(string_view key)
-	{
-		auto n = root;
+	leaf *descend(string_view key);
 
-		while (!n.is_leaf() && n->byte < key.size()) {
-			auto nn = n->child[slice_index(key.data()[n->byte],
-						       n->bit)];
-
-			if (nn)
-				n = nn;
-			else {
-				n = bottom_leaf<
-					typename node::forward_iterator>(n);
-				break;
-			}
-		}
-
-		if (!n.is_leaf())
-			n = bottom_leaf<typename node::forward_iterator>(n);
-
-		return n.get_leaf();
-	}
-
-	bool
-	keys_equal(string_view k1, string_view k2)
-	{
-		return k1.size() == k2.size() && k1.compare(k2) == 0;
-	}
+	bool keys_equal(string_view k1, string_view k2);
 
 	/*
 	 * internal: slice_index -- return index of child at the given nib
 	 */
 	unsigned slice_index(char k, uint8_t shift);
 
+	static byten_t prefix_diff(string_view lhs, string_view rhs);
+
 	/*
 	 * internal: delete_node -- recursively free (to malloc) a subtree
 	 */
 	void delete_node(tagged_node_ptr n);
 
-	/*
-	 * Helper method for iteration.
-	//  */
-	// void iterate_rec(tagged_node_ptr n, pmemkv_get_kv_callback *callback,
-	// void *arg);
+	void iterate_rec(tagged_node_ptr n);
+};
+
+/*
+ * Internal nodes store SLNODES children ptrs + one leaf ptr.
+ * The leaf ptr is used only for nodes for which length of the path from
+ * root is a multiple of byte (n->bit == 8 - SLICE).
+ *
+ * This ptr stores pointer to a leaf
+ * which is a prefix of some other (bottom) leaf.
+ */
+template <typename Value>
+struct radix_tree<Value>::node {
+	tagged_node_ptr parent;
+	tagged_node_ptr leaf;
+	tagged_node_ptr child[SLNODES];
+	byten_t byte;
+	bitn_t bit;
+
+	struct forward_iterator;
+	struct reverse_iterator;
+
+	template <typename Iterator>
+	typename std::enable_if<std::is_same<Iterator, forward_iterator>::value,
+				Iterator>::type
+	begin();
+
+	template <typename Iterator>
+	typename std::enable_if<std::is_same<Iterator, forward_iterator>::value,
+				Iterator>::type
+	end();
+
+	/* rbegin */
+	template <typename Iterator>
+	typename std::enable_if<std::is_same<Iterator, reverse_iterator>::value,
+				Iterator>::type
+	begin();
+
+	/* rend */
+	template <typename Iterator>
+	typename std::enable_if<std::is_same<Iterator, reverse_iterator>::value,
+				Iterator>::type
+	end();
+
+	template <typename Iterator = forward_iterator>
+	Iterator find_child(tagged_node_ptr n);
+
+	// uint8_t padding[256 - sizeof(mtx) - sizeof(child) -
+	// sizeof(byte) - 		sizeof(bit)];
+};
+
+template <typename Value>
+struct radix_tree<Value>::tagged_node_ptr {
+	tagged_node_ptr();
+	tagged_node_ptr(const tagged_node_ptr &rhs);
+	tagged_node_ptr(std::nullptr_t);
+
+	tagged_node_ptr(const obj::persistent_ptr<leaf> &ptr);
+	tagged_node_ptr(const obj::persistent_ptr<node> &ptr);
+
+	tagged_node_ptr &operator=(const tagged_node_ptr &rhs);
+	tagged_node_ptr &operator=(std::nullptr_t);
+	tagged_node_ptr &operator=(const obj::persistent_ptr<leaf> &rhs);
+	tagged_node_ptr &operator=(const obj::persistent_ptr<node> &rhs);
+
+	bool operator==(const tagged_node_ptr &rhs) const;
+	bool operator!=(const tagged_node_ptr &rhs) const;
+
+	bool is_leaf() const;
+
+	radix_tree::leaf *get_leaf() const;
+	radix_tree::node *get_node() const;
+
+	radix_tree::node *operator->() const noexcept;
+
+	explicit operator bool() const noexcept;
+
+private:
+	template <typename T>
+	T get() const noexcept;
+
+	obj::p<uint64_t> off;
+};
+
+template <typename Value>
+struct radix_tree<Value>::iterator {
+	using value_type = std::pair<string_view, Value &>;
+
+	iterator(std::nullptr_t);
+	iterator(tagged_node_ptr);
+
+	value_type operator*();
+
+	string_view key();
+	Value &value();
+
+	iterator operator++();
+	iterator operator--();
+
+private:
+	tagged_node_ptr node;
+
+	template <typename ChildIterator>
+	static tagged_node_ptr next_node(tagged_node_ptr n);
+
+	template <typename ChildIterator>
+	static tagged_node_ptr next_leaf(tagged_node_ptr n);
+};
+
+template <typename Value>
+struct radix_tree<Value>::node::forward_iterator {
+	using difference_type = std::ptrdiff_t;
+	using value_type = tagged_node_ptr;
+	using pointer = value_type *;
+	using reference = value_type &;
+	using iterator_category = std::input_iterator_tag;
+
+	forward_iterator(tagged_node_ptr *ptr, node *n);
+
+	forward_iterator operator++();
+	forward_iterator operator++(int);
+
+	tagged_node_ptr &operator*();
+	tagged_node_ptr *operator->();
+
+	bool operator!=(const forward_iterator &rhs) const;
+
+private:
+	tagged_node_ptr *ptr;
+	node *n;
+};
+
+template <typename Value>
+struct radix_tree<Value>::node::reverse_iterator {
+	using difference_type = std::ptrdiff_t;
+	using value_type = tagged_node_ptr;
+	using pointer = value_type *;
+	using reference = value_type &;
+	using iterator_category = std::input_iterator_tag;
+
+	reverse_iterator(tagged_node_ptr *ptr, node *n);
+
+	reverse_iterator operator++();
+	reverse_iterator operator++(int);
+
+	tagged_node_ptr &operator*();
+	tagged_node_ptr *operator->();
+
+	bool operator!=(const reverse_iterator &rhs) const;
+
+private:
+	tagged_node_ptr *ptr;
+	node *n;
 };
 
 template <typename Value>
@@ -603,7 +399,7 @@ typename radix_tree<Value>::leaf *
 radix_tree<Value>::bottom_leaf(typename radix_tree<Value>::tagged_node_ptr n)
 {
 	for (auto it = n->template begin<ChildIterator>();
-	     it != n->template end<ChildIterator>(); it++)
+	     it != n->template end<ChildIterator>(); ++it)
 		if (*it)
 			return it->is_leaf() ? it->get_leaf()
 					     : bottom_leaf<ChildIterator>(*it);
@@ -611,8 +407,79 @@ radix_tree<Value>::bottom_leaf(typename radix_tree<Value>::tagged_node_ptr n)
 	assert(false);
 }
 
-static inline byten_t
-prefix_diff(string_view lhs, string_view rhs)
+template <typename Value>
+int
+radix_tree<Value>::n_child(tagged_node_ptr n)
+{
+	int num = 0;
+	for (int i = 0; i < (int)SLNODES; i++) {
+		auto &child = n->child[i];
+		if (child) {
+			num++;
+		}
+	}
+
+	return num;
+}
+
+template <typename Value>
+typename radix_tree<Value>::tagged_node_ptr &
+radix_tree<Value>::parent_ref(tagged_node_ptr n)
+{
+	if (n.is_leaf())
+		return n.get_leaf()->parent;
+
+	return n->parent;
+}
+
+template <typename Value>
+template <typename... Args>
+typename radix_tree<Value>::tagged_node_ptr
+radix_tree<Value>::make_leaf(tagged_node_ptr parent, Args &&... args)
+{
+	assert(pmemobj_tx_stage() == TX_STAGE_WORK);
+
+	size_++;
+
+	auto ptr = make_persistent<leaf>(std::forward<Args>(args)...);
+	ptr->parent = parent;
+
+	return ptr;
+}
+
+template <typename Value>
+typename radix_tree<Value>::leaf *
+radix_tree<Value>::descend(string_view key)
+{
+	auto n = root;
+
+	while (!n.is_leaf() && n->byte < key.size()) {
+		auto nn = n->child[slice_index(key.data()[n->byte], n->bit)];
+
+		if (nn)
+			n = nn;
+		else {
+			n = bottom_leaf<typename node::forward_iterator>(n);
+			break;
+		}
+	}
+
+	if (!n.is_leaf())
+		n = bottom_leaf<typename node::forward_iterator>(n);
+
+	return n.get_leaf();
+}
+
+template <typename Value>
+bool
+radix_tree<Value>::keys_equal(string_view k1, string_view k2)
+{
+	return k1.size() == k2.size() && k1.compare(k2) == 0;
+}
+
+template <typename Value>
+inline byten_t
+radix_tree<Value>::prefix_diff(string_view lhs, string_view rhs)
 {
 	byten_t diff;
 	for (diff = 0; diff < std::min(lhs.size(), rhs.size()); diff++) {
@@ -626,7 +493,7 @@ prefix_diff(string_view lhs, string_view rhs)
 template <typename Value>
 template <class... Args>
 std::pair<typename radix_tree<Value>::iterator, bool>
-radix_tree<Value>::emplace(std::string_view key, Args &&... args)
+radix_tree<Value>::emplace(obj::string_view key, Args &&... args)
 {
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
@@ -774,7 +641,7 @@ radix_tree<Value>::emplace(std::string_view key, Args &&... args)
 
 template <typename Value>
 typename radix_tree<Value>::iterator
-radix_tree<Value>::find(std::string_view key)
+radix_tree<Value>::find(obj::string_view key)
 {
 	auto n = root;
 	auto prev = n;
@@ -783,62 +650,49 @@ radix_tree<Value>::find(std::string_view key)
 		if (n->byte == key.size() && n->bit == 4)
 			n = n->leaf;
 		else if (n->byte > key.size())
-			return nullptr;
+			return end();
 		else
 			n = n->child[slice_index(key.data()[n->byte], n->bit)];
 	}
 
 	if (!n)
-		return nullptr;
+		return end();
 
 	if (key.compare(n.get_leaf()->data.key()) != 0)
-		return nullptr;
+		return end();
 
 	return n;
 }
 
 template <typename Value>
-bool
-radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
+typename radix_tree<Value>::iterator
+radix_tree<Value>::erase(iterator pos)
 {
-	auto n = root;
-	auto *parent = &root;
-	decltype(parent) pp = nullptr;
-
-	while (n && !n.is_leaf()) {
-		pp = parent;
-
-		if (n->byte == key.size() && n->bit == 4)
-			parent = &n->leaf;
-		else if (n->byte > key.size())
-			return false;
-		else
-			parent = &n->child[slice_index(key.data()[n->byte],
-						       n->bit)];
-
-		n = *parent;
-	}
-
-	if (!n)
-		return false;
-
-	auto leaf = n.get_leaf();
-	if (!keys_equal(key, leaf->data.key()))
-		return false;
+	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
 	obj::transaction::run(pop, [&] {
+		auto leaf = pos.node.get_leaf();
+		auto parent = leaf->parent;
+
 		obj::delete_persistent<radix_tree::leaf>(leaf);
 
-		*parent = 0;
 		size_--;
 
 		/* was root */
-		if (!pp)
+		if (!parent) {
+			root = nullptr;
+			pos = begin();
 			return;
+		}
 
-		n = *pp;
+		++pos;
+		*parent->find_child(tagged_node_ptr(leaf)) = nullptr;
+
+		/* Compress the tree vertically. */
+		auto n = parent;
+		parent = n->parent;
 		tagged_node_ptr only_child = nullptr;
-		for (int i = 0; i < (int)SLNODES; i++) {
+		for (size_t i = 0; i < SLNODES; i++) {
 			if (n->child[i]) {
 				if (only_child) {
 					/* more than one child */
@@ -848,20 +702,26 @@ radix_tree<Value>::remove(obj::pool_base &pop, string_view key)
 			}
 		}
 
-		if (only_child && n->leaf && &n->leaf != parent) {
-			/* there are actually 2 "childred" */
+		if (only_child && n->leaf) {
+			/* There are actually 2 "childred" so we can't compress.
+			 */
 			return;
-		} else if (n->leaf && &n->leaf != parent)
+		} else if (n->leaf)
 			only_child = n->leaf;
 
 		assert(only_child);
 
 		only_child->parent = n->parent;
+
+		if (!parent)
+			root = nullptr;
+		else
+			*parent->find_child(n) = nullptr;
+
 		obj::delete_persistent<radix_tree::node>(n.get_node());
-		*pp = only_child;
 	});
 
-	return true;
+	return pos;
 }
 
 template <typename Value>
@@ -874,7 +734,9 @@ radix_tree<Value>::begin()
 	if (root.is_leaf())
 		return root;
 
-	return bottom_leaf<typename node::forward_iterator>(root);
+	auto first = tagged_node_ptr(
+		bottom_leaf<typename node::forward_iterator>(root));
+	return iterator(first);
 }
 
 template <typename Value>
@@ -885,9 +747,11 @@ radix_tree<Value>::end()
 		return nullptr;
 
 	if (root.is_leaf())
-		return root + 1;
+		return ++begin();
 
-	return bottom_leaf<typename node::reverse_iterator>(root);
+	auto last = tagged_node_ptr(
+		bottom_leaf<typename node::reverse_iterator>(root));
+	return iterator(last);
 }
 
 template <typename Value>
@@ -1112,6 +976,269 @@ typename radix_tree<Value>::node *
 	radix_tree<Value>::tagged_node_ptr::operator->() const noexcept
 {
 	return get_node();
+}
+
+template <typename Value>
+template <typename T>
+T
+radix_tree<Value>::tagged_node_ptr::get() const noexcept
+{
+	auto s = reinterpret_cast<T>(reinterpret_cast<uint64_t>(this) +
+				     (off & ~uint64_t(1)));
+	return s;
+}
+
+template <typename Value>
+radix_tree<Value>::node::forward_iterator::forward_iterator(
+	tagged_node_ptr *ptr, node *n)
+    : ptr(ptr), n(n)
+{
+}
+
+template <typename Value>
+typename radix_tree<Value>::node::forward_iterator
+radix_tree<Value>::node::forward_iterator::operator++()
+{
+	if (ptr == &n->leaf)
+		ptr = &n->child[0];
+	else
+		ptr++;
+
+	return *this;
+}
+
+template <typename Value>
+typename radix_tree<Value>::node::forward_iterator
+radix_tree<Value>::node::forward_iterator::operator++(int)
+{
+	forward_iterator tmp(ptr, n);
+	operator++();
+	return tmp;
+}
+template <typename Value>
+typename radix_tree<Value>::tagged_node_ptr &
+	radix_tree<Value>::node::forward_iterator::operator*()
+{
+	return *ptr;
+}
+
+template <typename Value>
+typename radix_tree<Value>::tagged_node_ptr *
+	radix_tree<Value>::node::forward_iterator::operator->()
+{
+	return ptr;
+}
+template <typename Value>
+bool
+radix_tree<Value>::node::forward_iterator::operator!=(
+	const forward_iterator &rhs) const
+{
+	return ptr != rhs.ptr;
+}
+
+template <typename Value>
+radix_tree<Value>::node::reverse_iterator::reverse_iterator(
+	tagged_node_ptr *ptr, node *n)
+    : ptr(ptr), n(n)
+{
+}
+
+template <typename Value>
+typename radix_tree<Value>::node::reverse_iterator
+radix_tree<Value>::node::reverse_iterator::operator++()
+{
+	if (ptr == &n->child[0])
+		ptr = &n->leaf;
+	else
+		ptr--;
+
+	return *this;
+}
+
+template <typename Value>
+typename radix_tree<Value>::node::reverse_iterator
+radix_tree<Value>::node::reverse_iterator::operator++(int)
+{
+	reverse_iterator tmp(ptr, n);
+	operator++();
+	return tmp;
+}
+
+template <typename Value>
+typename radix_tree<Value>::tagged_node_ptr &
+	radix_tree<Value>::node::reverse_iterator::operator*()
+{
+	return *ptr;
+}
+
+template <typename Value>
+typename radix_tree<Value>::tagged_node_ptr *
+	radix_tree<Value>::node::reverse_iterator::operator->()
+{
+	return ptr;
+}
+
+template <typename Value>
+bool
+radix_tree<Value>::node::reverse_iterator::operator!=(
+	const reverse_iterator &rhs) const
+{
+	return ptr != rhs.ptr;
+}
+
+template <typename Value>
+template <typename Iterator>
+typename std::enable_if<
+	std::is_same<Iterator,
+		     typename radix_tree<Value>::node::forward_iterator>::value,
+	Iterator>::type
+radix_tree<Value>::node::begin()
+{
+	return Iterator(&leaf, this);
+}
+
+template <typename Value>
+template <typename Iterator>
+typename std::enable_if<
+	std::is_same<Iterator,
+		     typename radix_tree<Value>::node::forward_iterator>::value,
+	Iterator>::type
+radix_tree<Value>::node::end()
+{
+	return Iterator(&child[SLNODES], this);
+}
+
+template <typename Value>
+template <typename Iterator>
+typename std::enable_if<
+	std::is_same<Iterator,
+		     typename radix_tree<Value>::node::reverse_iterator>::value,
+	Iterator>::type
+radix_tree<Value>::node::begin()
+{
+	return Iterator(&child[SLNODES - 1], this);
+}
+
+template <typename Value>
+template <typename Iterator>
+typename std::enable_if<
+	std::is_same<Iterator,
+		     typename radix_tree<Value>::node::reverse_iterator>::value,
+	Iterator>::type
+radix_tree<Value>::node::end()
+{
+	return Iterator(&leaf - 1, this);
+}
+
+template <typename Value>
+template <
+	typename Iterator = typename radix_tree<Value>::node::forward_iterator>
+Iterator
+radix_tree<Value>::node::find_child(radix_tree<Value>::tagged_node_ptr n)
+{
+	return std::find(begin<Iterator>(), end<Iterator>(), n);
+}
+
+template <typename Value>
+radix_tree<Value>::iterator::iterator(std::nullptr_t) : node(nullptr)
+{
+}
+
+template <typename Value>
+radix_tree<Value>::iterator::iterator(
+	typename radix_tree<Value>::tagged_node_ptr node)
+    : node(node)
+{
+}
+
+template <typename Value>
+typename radix_tree<Value>::iterator::value_type
+	radix_tree<Value>::iterator::operator*()
+{
+	auto leaf = node.get_leaf();
+
+	return {leaf->data.key(), leaf->data.value()};
+}
+
+template <typename Value>
+string_view
+radix_tree<Value>::iterator::key()
+{
+	return (**this).first;
+}
+
+template <typename Value>
+Value &
+radix_tree<Value>::iterator::value()
+{
+	return (**this).second;
+}
+
+template <typename Value>
+typename radix_tree<Value>::iterator
+radix_tree<Value>::iterator::operator++()
+{
+	if (node)
+		node = next_node<typename node::forward_iterator>(node);
+
+	return *this;
+}
+
+template <typename Value>
+typename radix_tree<Value>::iterator
+radix_tree<Value>::iterator::operator--()
+{
+	if (node)
+		node = next_node<typename node::reverse_iterator>(node);
+
+	return *this;
+}
+
+template <typename Value>
+template <typename ChildIterator>
+typename radix_tree<Value>::tagged_node_ptr
+radix_tree<Value>::iterator::next_node(
+	typename radix_tree<Value>::tagged_node_ptr n)
+{
+	/* It must be dereferenceable. */
+	assert(n);
+
+	auto parent = n.is_leaf() ? n.get_leaf()->parent : n->parent;
+
+	if (!parent)
+		return nullptr; // XXX: return rightmost leaf?
+
+	auto child_slot = parent->template find_child<ChildIterator>(n);
+
+	do {
+		++child_slot;
+	} while (child_slot != parent->template end<ChildIterator>() &&
+		 !(*child_slot));
+
+	/* No more childeren on this level, need to go up. */
+	if (!(child_slot != parent->template end<ChildIterator>()))
+		return next_node<ChildIterator>(parent);
+
+	return next_leaf<ChildIterator>(*child_slot);
+}
+
+template <typename Value>
+template <typename ChildIterator>
+typename radix_tree<Value>::tagged_node_ptr
+radix_tree<Value>::iterator::next_leaf(
+	typename radix_tree<Value>::tagged_node_ptr n)
+{
+	if (n.is_leaf())
+		return n;
+
+	for (auto it = n->template begin<ChildIterator>();
+	     it != n->template end<ChildIterator>(); ++it) {
+		if (*it)
+			return next_leaf<ChildIterator>(*it);
+	}
+
+	/* There must be at least one leaf at the bottom. */
+	assert(false);
 }
 
 }

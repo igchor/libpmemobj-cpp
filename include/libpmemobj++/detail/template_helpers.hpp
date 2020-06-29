@@ -38,6 +38,15 @@ struct supports_impl<T, void_t<Checks<T>...>, Checks...> {
 template <typename T, template <typename> class... Checks>
 using supports = typename supports_impl<T, void, Checks...>::type;
 
+/* Checks if given type is a specialization of a specific template */
+template <class T, template <class...> class Template>
+struct is_specialization : std::false_type {
+};
+
+template <template <class...> class Template, class... Args>
+struct is_specialization<Template<Args...>, Template> : std::true_type {
+};
+
 } /* namespace detail */
 
 } /* namespace pmem */
