@@ -1236,24 +1236,23 @@ template <typename... Args, typename T>
 typename std::enable_if<std::is_same<T, inline_string>::value>::type
 radix_tree<Value>::iterator::assign(string_view v)
 {
-	auto capacity =
-		pmemobj_alloc_usable_size(pmemobj_oid(node.get_leaf())) -
-		sizeof(leaf) - key().size();
+	// auto capacity =
+	// pmemobj_alloc_usable_size(pmemobj_oid(node.get_leaf())) -
+	// sizeof(leaf) - key().size();
 
-	if (v.size() <= capacity) {
-		node.get_leaf()->value_accessor().assign(v);
-	} else {
-		auto pop = pool_base(pmemobj_pool_by_ptr(node.get_leaf()));
+	// if (v.size() <= capacity) {
+	// node.get_leaf()->value_accessor().assign(v);
+	// } else {
+	auto pop = pool_base(pmemobj_pool_by_ptr(node.get_leaf()));
 
-		auto old_leaf = node.get_leaf();
-		auto child_slot = old_leaf->parent->find_child(node);
+	auto old_leaf = node.get_leaf();
+	auto child_slot = old_leaf->parent->find_child(node);
 
-		transaction::run(pop, [&] {
-			*child_slot = leaf::make(old_leaf->parent,
-						 old_leaf->key(), v);
-			delete_persistent<typename radix_tree::leaf>(old_leaf);
-		});
-	}
+	transaction::run(pop, [&] {
+		*child_slot = leaf::make(old_leaf->parent, old_leaf->key(), v);
+		delete_persistent<typename radix_tree::leaf>(old_leaf);
+	});
+	// }
 }
 
 template <typename Value>
