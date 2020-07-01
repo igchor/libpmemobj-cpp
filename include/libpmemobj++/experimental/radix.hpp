@@ -47,7 +47,8 @@ public:
 	~radix_tree();
 
 	template <class... Args>
-	std::pair<iterator, bool> emplace(string_view k, Args &&... args);
+	std::pair<iterator, bool> emplace(pool_base pop, string_view k,
+					  Args &&... args);
 
 	iterator find(string_view k);
 
@@ -277,7 +278,7 @@ struct radix_tree<Value>::iterator {
 
 	template <typename... Args, typename T = Value>
 	typename std::enable_if<std::is_same<T, inline_string>::value>::type
-	assign(string_view v);
+	assign(string_view v, pool_base pop);
 
 	iterator operator++();
 	iterator operator--();
@@ -461,10 +462,8 @@ radix_tree<Value>::prefix_diff(string_view lhs, string_view rhs)
 template <typename Value>
 template <class... Args>
 std::pair<typename radix_tree<Value>::iterator, bool>
-radix_tree<Value>::emplace(string_view key, Args &&... args)
+radix_tree<Value>::emplace(pool_base pop, string_view key, Args &&... args)
 {
-	auto pop = pool_base(pmemobj_pool_by_ptr(this));
-
 	if (!root) {
 		transaction::run(pop, [&] {
 			root = make_leaf(nullptr, key,
@@ -1234,7 +1233,7 @@ radix_tree<Value>::iterator::operator==(const iterator &rhs)
 template <typename Value>
 template <typename... Args, typename T>
 typename std::enable_if<std::is_same<T, inline_string>::value>::type
-radix_tree<Value>::iterator::assign(string_view v)
+radix_tree<Value>::iterator::assign(string_view v, pool_base pop)
 {
 	// auto capacity =
 	// pmemobj_alloc_usable_size(pmemobj_oid(node.get_leaf())) -
@@ -1243,7 +1242,6 @@ radix_tree<Value>::iterator::assign(string_view v)
 	// if (v.size() <= capacity) {
 	// node.get_leaf()->value_accessor().assign(v);
 	// } else {
-	auto pop = pool_base(pmemobj_pool_by_ptr(node.get_leaf()));
 
 	auto old_leaf = node.get_leaf();
 	auto child_slot = old_leaf->parent->find_child(node);
