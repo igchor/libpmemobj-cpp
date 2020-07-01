@@ -26,6 +26,8 @@
 
 #include <libpmemobj++/detail/pair.hpp>
 
+static uint64_t g_pool_id;
+
 namespace pmem
 {
 
@@ -151,8 +153,6 @@ struct radix_tree<Value>::tagged_node_ptr {
 	explicit operator bool() const noexcept;
 
 private:
-	template <typename T>
-	T get() const noexcept;
 
 	p<uint64_t> off;
 };
@@ -346,6 +346,8 @@ radix_tree<Value>::radix_tree() : root(nullptr), size_(0)
 {
 	static_assert(sizeof(node) == 256,
 		      "Internal node should have size equal to 256 bytes.");
+
+	g_pool_id = pmemobj_oid(this).pool_uuid_lo;
 }
 
 template <typename Value>
@@ -848,27 +850,14 @@ radix_tree<Value>::tagged_node_ptr::tagged_node_ptr()
 template <typename Value>
 radix_tree<Value>::tagged_node_ptr::tagged_node_ptr(const tagged_node_ptr &rhs)
 {
-	if (!rhs) {
-		this->off = 0;
-	} else {
-		this->off =
-			rhs.get<uint64_t>() - reinterpret_cast<uint64_t>(this);
-		off |= unsigned(rhs.is_leaf());
-	}
+	this->off = rhs.off;
 }
 
 template <typename Value>
 typename radix_tree<Value>::tagged_node_ptr &
 radix_tree<Value>::tagged_node_ptr::operator=(const tagged_node_ptr &rhs)
 {
-	if (!rhs) {
-		this->off = 0;
-	} else {
-		this->off =
-			rhs.get<uint64_t>() - reinterpret_cast<uint64_t>(this);
-		off |= unsigned(rhs.is_leaf());
-	}
-
+	this->off = rhs.off;
 	return *this;
 }
 
@@ -876,25 +865,14 @@ template <typename Value>
 radix_tree<Value>::tagged_node_ptr::tagged_node_ptr(
 	const persistent_ptr<leaf> &ptr)
 {
-	if (!ptr) {
-		this->off = 0;
-	} else {
-		off = reinterpret_cast<uint64_t>(ptr.get()) -
-			reinterpret_cast<uint64_t>(this);
-		off |= 1U;
-	}
+	off = (ptr.raw().off | 1);
 }
 
 template <typename Value>
 radix_tree<Value>::tagged_node_ptr::tagged_node_ptr(
 	const persistent_ptr<node> &ptr)
 {
-	if (!ptr) {
-		this->off = 0;
-	} else {
-		off = reinterpret_cast<uint64_t>(ptr.get()) -
-			reinterpret_cast<uint64_t>(this);
-	}
+	off = ptr.raw().off;
 }
 
 template <typename Value>
@@ -910,14 +888,7 @@ template <typename Value>
 typename radix_tree<Value>::tagged_node_ptr &
 radix_tree<Value>::tagged_node_ptr::operator=(const persistent_ptr<leaf> &rhs)
 {
-	if (!rhs) {
-		this->off = 0;
-	} else {
-		off = reinterpret_cast<uint64_t>(rhs.get()) -
-			reinterpret_cast<uint64_t>(this);
-		off |= 1U;
-	}
-
+	off = (rhs.raw().off | 1);
 	return *this;
 }
 
@@ -925,13 +896,7 @@ template <typename Value>
 typename radix_tree<Value>::tagged_node_ptr &
 radix_tree<Value>::tagged_node_ptr::operator=(const persistent_ptr<node> &rhs)
 {
-	if (!rhs) {
-		this->off = 0;
-	} else {
-		off = reinterpret_cast<uint64_t>(rhs.get()) -
-			reinterpret_cast<uint64_t>(this);
-	}
-
+	off = rhs.raw().off;
 	return *this;
 }
 
@@ -940,7 +905,7 @@ bool
 radix_tree<Value>::tagged_node_ptr::operator==(
 	const radix_tree::tagged_node_ptr &rhs) const
 {
-	return get<uint64_t>() == rhs.get<uint64_t>() || (!*this && !rhs);
+	return off == rhs.off;
 }
 
 template <typename Value>
@@ -963,7 +928,7 @@ typename radix_tree<Value>::leaf *
 radix_tree<Value>::tagged_node_ptr::get_leaf() const
 {
 	assert(is_leaf());
-	return get<radix_tree::leaf *>();
+	return (leaf *)pmemobj_direct({g_pool_id, off & ~1ULL});
 }
 
 template <typename Value>
@@ -971,13 +936,13 @@ typename radix_tree<Value>::node *
 radix_tree<Value>::tagged_node_ptr::get_node() const
 {
 	assert(!is_leaf());
-	return get<radix_tree::node *>();
+	return (node *)pmemobj_direct({g_pool_id, off});
 }
 
 template <typename Value>
 radix_tree<Value>::tagged_node_ptr::operator bool() const noexcept
 {
-	return (off & ~uint64_t(1)) != 0;
+	return off != 0;
 }
 
 template <typename Value>
@@ -985,16 +950,6 @@ typename radix_tree<Value>::node *
 	radix_tree<Value>::tagged_node_ptr::operator->() const noexcept
 {
 	return get_node();
-}
-
-template <typename Value>
-template <typename T>
-T
-radix_tree<Value>::tagged_node_ptr::get() const noexcept
-{
-	auto s = reinterpret_cast<T>(reinterpret_cast<uint64_t>(this) +
-				     (off & ~uint64_t(1)));
-	return s;
 }
 
 template <typename Value>
