@@ -26,6 +26,8 @@
 
 #include <libpmemobj++/detail/pair.hpp>
 
+#include <libpmemobj/action_base.h>
+
 static uint64_t g_pool_id;
 
 namespace pmem
@@ -33,6 +35,59 @@ namespace pmem
 
 namespace obj
 {
+
+struct actions {
+	actions(obj::pool_base pop, uint64_t pool_id, std::size_t cap = 4)
+	    : pop(pop), pool_id(pool_id)
+	{
+		acts.reserve(cap);
+	}
+
+	void
+	set(uint64_t *what, uint64_t value)
+	{
+		acts.emplace_back();
+		pmemobj_set_value(pop.handle(), &acts.back(), what, value);
+	}
+
+	void
+	free(uint64_t off)
+	{
+		off = off & ~1ULL;
+
+		if (!off)
+			return;
+
+		acts.emplace_back();
+		pmemobj_defer_free(pop.handle(), PMEMoid{pool_id, off},
+				   &acts.back());
+	}
+
+	template <typename T, typename... Args>
+	obj::persistent_ptr<T>
+	make(uint64_t size, Args &&... args)
+	{
+		acts.emplace_back();
+		obj::persistent_ptr<T> ptr =
+			pmemobj_reserve(pop.handle(), &acts.back(), size, 0);
+
+		new (ptr.get()) T(std::forward<Args>(args)...);
+
+		return ptr;
+	}
+
+	void
+	publish()
+	{
+		if (pmemobj_publish(pop.handle(), acts.data(), acts.size()))
+			throw std::runtime_error("XXX");
+	}
+
+private:
+	std::vector<pobj_action> acts;
+	obj::pool_base pop;
+	uint64_t pool_id;
+};
 
 template <typename Value>
 class radix_tree {
@@ -86,6 +141,7 @@ private:
 
 	/*** pmem members ***/
 	tagged_node_ptr root;
+	tagged_node_ptr shadow_root;
 	p<uint64_t> size_;
 
 	/* helper functions */
@@ -112,7 +168,8 @@ private:
 	static byten_t prefix_diff(string_view lhs, string_view rhs);
 
 	template <typename... Args>
-	tagged_node_ptr make_leaf(tagged_node_ptr parent, Args &&... args);
+	tagged_node_ptr make_leaf(actions &acts, tagged_node_ptr parent,
+				  Args &&... args);
 
 	leaf *bottom_leaf(tagged_node_ptr n);
 
@@ -148,12 +205,17 @@ struct radix_tree<Value>::tagged_node_ptr {
 	radix_tree::leaf *get_leaf() const;
 	radix_tree::node *get_node() const;
 
+	uint64_t
+	offset() const
+	{
+		return off;
+	}
+
 	radix_tree::node *operator->() const noexcept;
 
 	explicit operator bool() const noexcept;
 
 private:
-
 	p<uint64_t> off;
 };
 
@@ -162,7 +224,7 @@ struct radix_tree<Value>::leaf {
 	using tree_type = radix_tree<Value>;
 
 	template <typename... Args>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
+	static persistent_ptr<leaf> make(actions &acts, tagged_node_ptr parent,
 					 Args &&... args);
 
 	string_view key();
@@ -187,7 +249,7 @@ struct radix_tree<Value>::leaf {
 	tagged_node_ptr parent = nullptr;
 	detail::pair<key_type, mapped_type> data;
 
-private:
+	// private:
 	template <typename... Args, typename T = Value,
 		  typename Enable = typename std::enable_if<
 			  !std::is_same<T, inline_string>::value>::type>
@@ -201,12 +263,12 @@ private:
 	template <typename... Args, typename T = Value>
 	static typename std::enable_if<!std::is_same<T, inline_string>::value,
 				       persistent_ptr<leaf>>::type
-	make_internal(string_view key, Args &&... args);
+	make_internal(actions &acts, string_view key, Args &&... args);
 
 	template <typename T = Value>
 	static typename std::enable_if<std::is_same<T, inline_string>::value,
 				       persistent_ptr<leaf>>::type
-	make_internal(string_view key, string_view value);
+	make_internal(actions &acts, string_view key, string_view value);
 };
 
 /*
@@ -408,13 +470,11 @@ radix_tree<Value>::parent_ref(tagged_node_ptr n)
 template <typename Value>
 template <typename... Args>
 typename radix_tree<Value>::tagged_node_ptr
-radix_tree<Value>::make_leaf(tagged_node_ptr parent, Args &&... args)
+radix_tree<Value>::make_leaf(actions &acts, tagged_node_ptr parent,
+			     Args &&... args)
 {
-	assert(pmemobj_tx_stage() == TX_STAGE_WORK);
-
-	size_++;
-
-	return leaf::make(parent, std::forward<Args>(args)...);
+	acts.set((uint64_t *)&size_, size_ + 1);
+	return leaf::make(acts, parent, std::forward<Args>(args)...);
 }
 
 template <typename Value>
@@ -466,12 +526,14 @@ std::pair<typename radix_tree<Value>::iterator, bool>
 radix_tree<Value>::emplace(string_view key, Args &&... args)
 {
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
+	actions acts(pop, g_pool_id);
 
 	if (!root) {
-		transaction::run(pop, [&] {
-			root = make_leaf(nullptr, key,
-					 std::forward<Args>(args)...);
-		});
+		tagged_node_ptr new_leaf = make_leaf(
+			acts, nullptr, key, std::forward<Args>(args)...);
+
+		acts.set((uint64_t *)&root, new_leaf.offset());
+		acts.publish();
 
 		return {root, true};
 	}
@@ -516,10 +578,11 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 	if (!n) {
 		assert(diff < leaf->key().size() && diff < key.size());
 
-		transaction::run(pop, [&] {
-			*parent = make_leaf(prev, key,
-					    std::forward<Args>(args)...);
-		});
+		tagged_node_ptr new_leaf =
+			make_leaf(acts, prev, key, std::forward<Args>(args)...);
+
+		acts.set((uint64_t *)parent, new_leaf.offset());
+		acts.publish();
 
 		return {*parent, true};
 	}
@@ -536,31 +599,30 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 			if (n->leaf)
 				return {n->leaf, false};
 
-			transaction::run(pop, [&] {
-				n->leaf = make_leaf(
-					n, key, std::forward<Args>(args)...);
-			});
+			tagged_node_ptr new_leaf = make_leaf(
+				acts, n, key, std::forward<Args>(args)...);
+
+			acts.set((uint64_t *)&n->leaf, new_leaf.offset());
+			acts.publish();
 
 			return {n->leaf, true};
 		}
 
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			/* We have to add new node at the edge from parent to n
-			 */
-			node = make_persistent<radix_tree::node>();
-			node->leaf = make_leaf(node, key,
-					       std::forward<Args>(args)...);
-			node->child[slice_index(leaf->key().data()[diff], sh)] =
-				n;
-			node->parent = parent_ref(n);
-			node->byte = diff;
-			node->bit = sh;
+		tagged_node_ptr node =
+			acts.make<radix_tree::node>(sizeof(radix_tree::node));
 
-			parent_ref(n) = node;
+		tagged_node_ptr new_leaf =
+			make_leaf(acts, node, key, std::forward<Args>(args)...);
 
-			*parent = node;
-		});
+		node->child[slice_index(leaf->key().data()[diff], sh)] = n;
+		node->leaf = new_leaf;
+		node->byte = diff;
+		node->bit = sh;
+		node->parent = parent_ref(n);
+
+		acts.set((uint64_t *)parent, node.offset());
+		acts.set((uint64_t *)&parent_ref(n), node.offset());
+		acts.publish();
 
 		return {node->leaf, true};
 	}
@@ -569,42 +631,39 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 		/* Leaf key is a prefix of the new key. We need to convert leaf
 		 * to a node.
 		 */
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			/* We have to add new node at the edge from parent to n
-			 */
-			node = make_persistent<radix_tree::node>();
-			node->leaf = n;
-			node->child[slice_index(key.data()[diff], sh)] =
-				make_leaf(node, key,
-					  std::forward<Args>(args)...);
-			node->parent = parent_ref(n);
-			node->byte = diff;
-			node->bit = sh;
+		tagged_node_ptr node =
+			acts.make<radix_tree::node>(sizeof(radix_tree::node));
 
-			parent_ref(n) = node;
+		tagged_node_ptr new_leaf =
+			make_leaf(acts, node, key, std::forward<Args>(args)...);
 
-			*parent = node;
-		});
+		node->child[slice_index(key.data()[diff], sh)] = new_leaf;
+		node->leaf = n;
+		node->byte = diff;
+		node->bit = sh;
+		node->parent = parent_ref(n);
+
+		acts.set((uint64_t *)parent, node.offset());
+		acts.set((uint64_t *)&parent_ref(n), node.offset());
+		acts.publish();
 
 		return {node->child[slice_index(key.data()[diff], sh)], true};
 	}
 
-	tagged_node_ptr node;
-	transaction::run(pop, [&] {
-		/* We have to add new node at the edge from parent to n */
-		node = make_persistent<radix_tree::node>();
-		node->child[slice_index(leaf->key().data()[diff], sh)] = n;
-		node->child[slice_index(key.data()[diff], sh)] =
-			make_leaf(node, key, std::forward<Args>(args)...);
-		node->parent = parent_ref(n);
-		node->byte = diff;
-		node->bit = sh;
+	tagged_node_ptr node = acts.make<radix_tree::node>(sizeof(radix_tree::node));
 
-		parent_ref(n) = node;
+	tagged_node_ptr new_leaf =
+		make_leaf(acts, node, key, std::forward<Args>(args)...);
 
-		*parent = node;
-	});
+	node->child[slice_index(leaf->key().data()[diff], sh)] = n;
+	node->child[slice_index(key.data()[diff], sh)] = new_leaf;
+	node->byte = diff;
+	node->bit = sh;
+	node->parent = parent_ref(n);
+
+	acts.set((uint64_t *)parent, node.offset());
+	acts.set((uint64_t *)&parent_ref(n), node.offset());
+	acts.publish();
 
 	return {node->child[slice_index(key.data()[diff], sh)], true};
 }
@@ -1191,24 +1250,16 @@ template <typename... Args, typename T>
 typename std::enable_if<std::is_same<T, inline_string>::value>::type
 radix_tree<Value>::iterator::assign(string_view v)
 {
-	auto capacity =
-		pmemobj_alloc_usable_size(pmemobj_oid(node.get_leaf())) -
-		sizeof(leaf) - key().size();
+	auto pop = pool_base(pmemobj_pool_by_ptr(node.get_leaf()));
+	actions acts(pop, g_pool_id);
 
-	if (v.size() <= capacity) {
-		node.get_leaf()->value_accessor().assign(v);
-	} else {
-		auto pop = pool_base(pmemobj_pool_by_ptr(node.get_leaf()));
+	auto old_leaf = node.get_leaf();
+	auto child_slot = old_leaf->parent->find_child(node);
 
-		auto old_leaf = node.get_leaf();
-		auto child_slot = old_leaf->parent->find_child(node);
+	acts.free(node.offset());
+	*child_slot = leaf::make(acts, old_leaf->parent, old_leaf->key(), v);
 
-		transaction::run(pop, [&] {
-			*child_slot = leaf::make(old_leaf->parent,
-						 old_leaf->key(), v);
-			delete_persistent<typename radix_tree::leaf>(old_leaf);
-		});
-	}
+	acts.publish();
 }
 
 template <typename Value>
@@ -1270,9 +1321,10 @@ radix_tree<Value>::next_leaf(typename radix_tree<Value>::tagged_node_ptr n)
 template <typename Value>
 template <typename... Args>
 persistent_ptr<typename radix_tree<Value>::leaf>
-radix_tree<Value>::leaf::make(tagged_node_ptr parent, Args &&... args)
+radix_tree<Value>::leaf::make(actions &acts, tagged_node_ptr parent,
+			      Args &&... args)
 {
-	auto ptr = make_internal(std::forward<Args>(args)...);
+	auto ptr = make_internal(acts, std::forward<Args>(args)...);
 	ptr->parent = parent;
 
 	return ptr;
@@ -1326,30 +1378,21 @@ template <typename Value>
 template <typename... Args, typename T>
 typename std::enable_if<!std::is_same<T, inline_string>::value,
 			persistent_ptr<typename radix_tree<Value>::leaf>>::type
-radix_tree<Value>::leaf::make_internal(string_view key, Args &&... args)
+radix_tree<Value>::leaf::make_internal(actions &acts, string_view key,
+				       Args &&... args)
 {
-	standard_alloc_policy<void> a;
-	auto ptr = static_cast<persistent_ptr<leaf>>(
-		a.allocate(sizeof(leaf) + key.size()));
-
-	new (ptr.get()) leaf(key, std::forward<Args>(args)...);
-
-	return ptr;
+	return acts.make<leaf>(sizeof(leaf) + key.size(), key,
+			       std::forward<Args>(args)...);
 }
 
 template <typename Value>
 template <typename T>
 typename std::enable_if<std::is_same<T, inline_string>::value,
 			persistent_ptr<typename radix_tree<Value>::leaf>>::type
-radix_tree<Value>::leaf::make_internal(string_view key, string_view value)
+radix_tree<Value>::leaf::make_internal(actions &acts, string_view key,
+				       string_view value)
 {
-	standard_alloc_policy<void> a;
-	auto ptr = static_cast<persistent_ptr<leaf>>(
-		a.allocate(sizeof(leaf) + key.size() + value.size()));
-
-	new (ptr.get()) leaf(key, value);
-
-	return ptr;
+	return acts.make<leaf>(sizeof(leaf) + key.size() + value.size(), key, value);
 }
 
 template <typename Value>
