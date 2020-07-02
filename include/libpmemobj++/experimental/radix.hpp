@@ -329,8 +329,7 @@ struct radix_tree<Value>::iterator {
 	using reference = value_type &;
 	using iterator_category = std::bidirectional_iterator_tag;
 
-	iterator(std::nullptr_t);
-	iterator(tagged_node_ptr);
+	iterator(radix_tree *, tagged_node_ptr);
 
 	value_type operator*();
 
@@ -351,6 +350,7 @@ private:
 	friend class radix_tree;
 
 	tagged_node_ptr node;
+	radix_tree *tree;
 };
 
 template <typename Value>
@@ -535,7 +535,7 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 		acts.set((uint64_t *)&root, new_leaf.offset());
 		acts.publish();
 
-		return {root, true};
+		return {iterator(this, root), true};
 	}
 
 	/*
@@ -584,20 +584,20 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 		acts.set((uint64_t *)parent, new_leaf.offset());
 		acts.publish();
 
-		return {*parent, true};
+		return {iterator(this, *parent), true};
 	}
 
 	/* New key is a prefix of the leaf key or they are equal. We need to add
 	 * leaf ptr to internal node. */
 	if (diff == key.size()) {
 		if (n.is_leaf() && n.get_leaf()->key().size() == key.size()) {
-			return {n, false};
+			return {iterator(this, n), false};
 		}
 
 		if (!n.is_leaf() && n->byte == key.size() &&
 		    n->bit == 8 - SLICE) {
 			if (n->leaf)
-				return {n->leaf, false};
+				return {iterator(this, n->leaf), false};
 
 			tagged_node_ptr new_leaf = make_leaf(
 				acts, n, key, std::forward<Args>(args)...);
@@ -605,7 +605,7 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 			acts.set((uint64_t *)&n->leaf, new_leaf.offset());
 			acts.publish();
 
-			return {n->leaf, true};
+			return {iterator(this, n->leaf), true};
 		}
 
 		tagged_node_ptr node =
@@ -624,7 +624,7 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 		acts.set((uint64_t *)&parent_ref(n), node.offset());
 		acts.publish();
 
-		return {node->leaf, true};
+		return {iterator(this, node->leaf), true};
 	}
 
 	if (diff == leaf->key().size()) {
@@ -647,10 +647,14 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 		acts.set((uint64_t *)&parent_ref(n), node.offset());
 		acts.publish();
 
-		return {node->child[slice_index(key.data()[diff], sh)], true};
+		return {iterator(
+				this,
+				node->child[slice_index(key.data()[diff], sh)]),
+			true};
 	}
 
-	tagged_node_ptr node = acts.make<radix_tree::node>(sizeof(radix_tree::node));
+	tagged_node_ptr node =
+		acts.make<radix_tree::node>(sizeof(radix_tree::node));
 
 	tagged_node_ptr new_leaf =
 		make_leaf(acts, node, key, std::forward<Args>(args)...);
@@ -665,7 +669,8 @@ radix_tree<Value>::emplace(string_view key, Args &&... args)
 	acts.set((uint64_t *)&parent_ref(n), node.offset());
 	acts.publish();
 
-	return {node->child[slice_index(key.data()[diff], sh)], true};
+	return {iterator(this, node->child[slice_index(key.data()[diff], sh)]),
+		true};
 }
 
 template <typename Value>
@@ -688,7 +693,7 @@ radix_tree<Value>::find(string_view key)
 	if (!keys_equal(key, n.get_leaf()->key()))
 		return end();
 
-	return n;
+	return iterator(this, n);
 }
 
 template <typename Value>
@@ -769,6 +774,7 @@ radix_tree<Value>::lower_bound(string_view key)
 			slot = &n->leaf;
 		else if (n->byte > key.size())
 			return iterator(
+				this,
 				next_leaf<typename node::forward_iterator>(n));
 		else
 			slot = &n->child[slice_index(key.data()[n->byte],
@@ -780,15 +786,15 @@ radix_tree<Value>::lower_bound(string_view key)
 	if (!n) {
 		auto slot_it =
 			typename node::forward_iterator(slot, prev.get_node());
-		return iterator(next_node(slot_it));
+		return iterator(this, next_node(slot_it));
 	}
 
 	assert(n.is_leaf());
 
 	if (n.get_leaf()->key().compare(key) >= 0)
-		return n;
+		return iterator(this, n);
 
-	return ++iterator(n);
+	return ++iterator(this, n);
 }
 
 template <typename Value>
@@ -809,17 +815,19 @@ typename radix_tree<Value>::iterator
 radix_tree<Value>::begin()
 {
 	if (!root)
-		return nullptr;
+		return iterator(this, nullptr);
 
-	return radix_tree::next_leaf<
-		typename radix_tree::node::forward_iterator>(root);
+	return iterator(
+		this,
+		radix_tree::next_leaf<
+			typename radix_tree::node::forward_iterator>(root));
 }
 
 template <typename Value>
 typename radix_tree<Value>::iterator
 radix_tree<Value>::end()
 {
-	return nullptr;
+	return iterator(this, nullptr);
 }
 
 template <typename Value>
@@ -1177,14 +1185,9 @@ radix_tree<Value>::node::find_child(radix_tree<Value>::tagged_node_ptr n)
 }
 
 template <typename Value>
-radix_tree<Value>::iterator::iterator(std::nullptr_t) : node(nullptr)
-{
-}
-
-template <typename Value>
 radix_tree<Value>::iterator::iterator(
-	typename radix_tree<Value>::tagged_node_ptr node)
-    : node(node)
+	radix_tree *t, typename radix_tree<Value>::tagged_node_ptr node)
+    : node(node), tree(t)
 {
 }
 
@@ -1254,10 +1257,19 @@ radix_tree<Value>::iterator::assign(string_view v)
 	actions acts(pop, g_pool_id);
 
 	auto old_leaf = node.get_leaf();
-	auto child_slot = old_leaf->parent->find_child(node);
+	tagged_node_ptr *child_slot;
+
+	if (old_leaf->parent)
+		child_slot = old_leaf->parent->find_child(node).operator->();
+	else
+		child_slot = &tree->root;
 
 	acts.free(node.offset());
-	*child_slot = leaf::make(acts, old_leaf->parent, old_leaf->key(), v);
+
+	tagged_node_ptr new_leaf =
+		leaf::make(acts, old_leaf->parent, old_leaf->key(), v);
+
+	acts.set((uint64_t *)child_slot, new_leaf.offset());
 
 	acts.publish();
 }
@@ -1392,7 +1404,8 @@ typename std::enable_if<std::is_same<T, inline_string>::value,
 radix_tree<Value>::leaf::make_internal(actions &acts, string_view key,
 				       string_view value)
 {
-	return acts.make<leaf>(sizeof(leaf) + key.size() + value.size(), key, value);
+	return acts.make<leaf>(sizeof(leaf) + key.size() + value.size(), key,
+			       value);
 }
 
 template <typename Value>
