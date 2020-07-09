@@ -30,8 +30,8 @@ erase(container_t<int, double> &m, int pos)
 namespace nvobj = pmem::obj;
 namespace nvobjex = pmem::obj::experimental;
 
-template <typename T, typename U>
-using container_t = nvobjex::radix_tree<T, U>;
+template <typename T, typename U, typename BV = pmem::detail::bytes_view>
+using container_t = nvobjex::radix_tree<T, U, BV>;
 
 template <typename C, typename... Args>
 auto

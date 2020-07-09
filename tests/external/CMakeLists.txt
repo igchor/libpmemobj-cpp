@@ -1181,3 +1181,6 @@ endif()
 
 build_test_ext(NAME radix_libcxx_erase_key SRC_FILES libcxx/map/map.modifiers/erase_key.pass.cpp BUILD_OPTIONS -DRADIX)
 add_test_generic(NAME radix_libcxx_erase_key TRACERS none pmemcheck memcheck)
+
+build_test_ext(NAME radix_libcxx_count SRC_FILES libcxx/map/map.ops/count.pass.cpp BUILD_OPTIONS -DRADIX)
+add_test_generic(NAME radix_libcxx_count TRACERS none pmemcheck memcheck)
