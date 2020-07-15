@@ -286,7 +286,7 @@ struct radix_tree<Key, Value, BytesView>::node {
 	bitn_t bit;
 
 	struct forward_iterator;
-	struct reverse_iterator;
+	using reverse_iterator = std::reverse_iterator<forward_iterator>;
 
 	template <typename Iterator>
 	typename std::enable_if<std::is_same<Iterator, forward_iterator>::value,
@@ -407,37 +407,15 @@ struct radix_tree<Key, Value, BytesView>::node::forward_iterator {
 	forward_iterator operator++();
 	forward_iterator operator++(int);
 
+	forward_iterator operator--();
+
 	reference operator*() const;
 	pointer operator->() const;
 
 	const node *get_node() const;
 
 	bool operator!=(const forward_iterator &rhs) const;
-
-private:
-	pointer ptr;
-	const node *n;
-};
-
-template <typename Key, typename Value, typename BytesView>
-struct radix_tree<Key, Value, BytesView>::node::reverse_iterator {
-	using difference_type = std::ptrdiff_t;
-	using value_type = tagged_node_ptr;
-	using pointer = const value_type *;
-	using reference = const value_type &;
-	using iterator_category = std::input_iterator_tag;
-
-	reverse_iterator(pointer ptr, const node *n);
-
-	reverse_iterator operator++();
-	reverse_iterator operator++(int);
-
-	reference operator*() const;
-	pointer operator->() const;
-
-	const node *get_node() const;
-
-	bool operator!=(const reverse_iterator &rhs) const;
+	bool operator==(const forward_iterator &rhs) const;
 
 private:
 	pointer ptr;
@@ -1033,7 +1011,12 @@ template <typename Key, typename Value, typename BytesView>
 typename radix_tree<Key, Value, BytesView>::const_iterator
 radix_tree<Key, Value, BytesView>::cend() const
 {
-	return const_iterator(nullptr);
+	if (!root)
+		return const_iterator(nullptr);
+
+	return const_iterator(
+		&radix_tree::find_leaf<
+			typename radix_tree::node::reverse_iterator>(root) + 1);
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1366,6 +1349,18 @@ radix_tree<Key, Value, BytesView>::node::forward_iterator::operator++()
 
 template <typename Key, typename Value, typename BytesView>
 typename radix_tree<Key, Value, BytesView>::node::forward_iterator
+radix_tree<Key, Value, BytesView>::node::forward_iterator::operator--()
+{
+	if (ptr == &n->child[0])
+		ptr = &n->embedded_entry;
+	else
+		ptr--;
+
+	return *this;
+}
+
+template <typename Key, typename Value, typename BytesView>
+typename radix_tree<Key, Value, BytesView>::node::forward_iterator
 radix_tree<Key, Value, BytesView>::node::forward_iterator::operator++(int)
 {
 	forward_iterator tmp(ptr, n);
@@ -1397,6 +1392,14 @@ radix_tree<Key, Value, BytesView>::node::forward_iterator::get_node() const
 
 template <typename Key, typename Value, typename BytesView>
 bool
+radix_tree<Key, Value, BytesView>::node::forward_iterator::operator==(
+	const forward_iterator &rhs) const
+{
+	return ptr == rhs.ptr;
+}
+
+template <typename Key, typename Value, typename BytesView>
+bool
 radix_tree<Key, Value, BytesView>::node::forward_iterator::operator!=(
 	const forward_iterator &rhs) const
 {
@@ -1404,65 +1407,6 @@ radix_tree<Key, Value, BytesView>::node::forward_iterator::operator!=(
 }
 
 template <typename Key, typename Value, typename BytesView>
-radix_tree<Key, Value, BytesView>::node::reverse_iterator::reverse_iterator(
-	pointer ptr, const node *n)
-    : ptr(ptr), n(n)
-{
-}
-
-template <typename Key, typename Value, typename BytesView>
-typename radix_tree<Key, Value, BytesView>::node::reverse_iterator
-radix_tree<Key, Value, BytesView>::node::reverse_iterator::operator++()
-{
-	if (ptr == &n->child[0])
-		ptr = &n->embedded_entry;
-	else
-		ptr--;
-
-	return *this;
-}
-
-template <typename Key, typename Value, typename BytesView>
-typename radix_tree<Key, Value, BytesView>::node::reverse_iterator
-radix_tree<Key, Value, BytesView>::node::reverse_iterator::operator++(int)
-{
-	reverse_iterator tmp(ptr, n);
-	operator++();
-	return tmp;
-}
-
-template <typename Key, typename Value, typename BytesView>
-typename radix_tree<Key, Value, BytesView>::node::reverse_iterator::reference
-	radix_tree<Key, Value, BytesView>::node::reverse_iterator::operator*()
-		const
-{
-	return *ptr;
-}
-
-template <typename Key, typename Value, typename BytesView>
-typename radix_tree<Key, Value, BytesView>::node::reverse_iterator::pointer
-	radix_tree<Key, Value, BytesView>::node::reverse_iterator::operator->()
-		const
-{
-	return ptr;
-}
-
-template <typename Key, typename Value, typename BytesView>
-bool
-radix_tree<Key, Value, BytesView>::node::reverse_iterator::operator!=(
-	const reverse_iterator &rhs) const
-{
-	return ptr != rhs.ptr;
-}
-
-template <typename Key, typename Value, typename BytesView>
-typename radix_tree<Key, Value, BytesView>::node const *
-radix_tree<Key, Value, BytesView>::node::reverse_iterator::get_node() const
-{
-	return n;
-}
-
-template <typename Key, typename Value, typename BytesView>
 template <typename Iterator>
 typename std::enable_if<
 	std::is_same<Iterator,
@@ -1471,7 +1415,7 @@ typename std::enable_if<
 	Iterator>::type
 radix_tree<Key, Value, BytesView>::node::begin() const
 {
-	return Iterator(&embedded_entry, this);
+	return Iterator(forward_iterator(&embedded_entry, this));
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1483,7 +1427,7 @@ typename std::enable_if<
 	Iterator>::type
 radix_tree<Key, Value, BytesView>::node::end() const
 {
-	return Iterator(&child[SLNODES], this);
+	return Iterator(forward_iterator(&child[SLNODES], this));
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1495,7 +1439,7 @@ typename std::enable_if<
 	Iterator>::type
 radix_tree<Key, Value, BytesView>::node::begin() const
 {
-	return Iterator(&child[SLNODES - 1], this);
+	return Iterator(forward_iterator(&child[SLNODES - 1], this));
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1507,7 +1451,7 @@ typename std::enable_if<
 	Iterator>::type
 radix_tree<Key, Value, BytesView>::node::end() const
 {
-	return Iterator(&embedded_entry - 1, this);
+	return Iterator(forward_iterator(&embedded_entry - 1, this));
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1650,7 +1594,8 @@ typename radix_tree<Key, Value,
 		    BytesView>::template radix_tree_iterator<IsConst>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator--()
 {
-	assert(node);
+	//assert(node); 
+	// XXX if (!node) -> find topright
 
 	/* node is root, there is no other leaf in the tree */
 	if (!node->get_leaf()->parent)
@@ -1713,6 +1658,8 @@ radix_tree<Key, Value, BytesView>::next_leaf(ChildIterator child_slot)
 	return &find_leaf<ChildIterator>(*child_slot);
 }
 
+// XXX - can we replace bottom leaf with find_leaf<reverse> benchmark it?
+
 /*
  * Returns smallest (or biggest, depending on ChildIterator) leaf
  * in a subtree.
@@ -1723,6 +1670,8 @@ typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const &
 radix_tree<Key, Value, BytesView>::find_leaf(
 	typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const &n)
 {
+	assert(n);
+
 	if (n.is_leaf())
 		return n;
 
