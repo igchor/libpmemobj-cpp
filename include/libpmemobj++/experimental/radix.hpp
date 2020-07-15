@@ -1000,7 +1000,7 @@ typename radix_tree<Key, Value, BytesView>::const_iterator
 radix_tree<Key, Value, BytesView>::cbegin() const
 {
 	if (!root)
-		return const_iterator(nullptr);
+		return const_iterator(&root + 1); // XXX: root + 1 is a past-the-end iterator value. It's used since no valid node can have such address and it allows to obtain pointer to a root (in order to implement operator--)
 
 	return const_iterator(
 		&radix_tree::find_leaf<
@@ -1011,12 +1011,7 @@ template <typename Key, typename Value, typename BytesView>
 typename radix_tree<Key, Value, BytesView>::const_iterator
 radix_tree<Key, Value, BytesView>::cend() const
 {
-	if (!root)
-		return const_iterator(nullptr);
-
-	return const_iterator(
-		&radix_tree::find_leaf<
-			typename radix_tree::node::reverse_iterator>(root) + 1);
+	return const_iterator(&root + 1);
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1579,7 +1574,7 @@ radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator++()
 
 	/* node is root, there is no other leaf in the tree */
 	if (!node->get_leaf()->parent)
-		node = nullptr;
+		node = nullptr; /// XXX - remove that?
 	else
 		node = const_cast<node_ptr>(
 			next_leaf(typename node::forward_iterator(
@@ -1594,16 +1589,17 @@ typename radix_tree<Key, Value,
 		    BytesView>::template radix_tree_iterator<IsConst>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator--()
 {
-	//assert(node); 
-	// XXX if (!node) -> find topright
-
-	/* node is root, there is no other leaf in the tree */
-	if (!node->get_leaf()->parent)
-		node = nullptr;
-	else
+	if (!node) {
+		node = &radix_tree::find_leaf<
+			typename radix_tree::node::reverse_iterator>(root) + 1;
+	} else if (!node->get_leaf()->parent) {
+		/* node is root, there is no other leaf in the tree */
+		node = nullptr; /// XXX - remove that?
+	} else {
 		node = const_cast<node_ptr>(
 			next_leaf(typename node::reverse_iterator(
 				node, node->get_leaf()->parent.get_node())));
+	}
 
 	return *this;
 }
@@ -1648,8 +1644,8 @@ radix_tree<Key, Value, BytesView>::next_leaf(ChildIterator child_slot)
 	/* No more children on this level, need to go up. */
 	if (!(child_slot != parent->template end<ChildIterator>())) {
 		auto p = parent->parent;
-		if (!p)
-			return nullptr;
+		if (!p) // parent == root
+			return parent;
 
 		return next_leaf(p->template find_child<ChildIterator>(
 			tagged_node_ptr(const_cast<node *>(parent)))); // XXX
