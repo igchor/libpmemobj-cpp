@@ -37,6 +37,13 @@ add_check_whitespace(benchmarks-common ${CMAKE_CURRENT_SOURCE_DIR}/*.*pp)
 add_cppstyle(benchmarks-concurrent_hash_map ${CMAKE_CURRENT_SOURCE_DIR}/concurrent_hash_map/*.*pp)
 add_check_whitespace(benchmarks-concurrent_hash_map ${CMAKE_CURRENT_SOURCE_DIR}/concurrent_hash_map/*.*pp)
 
+add_cppstyle(benchmarks-radix_tree ${CMAKE_CURRENT_SOURCE_DIR}/radix_tree/*.*pp)
+add_check_whitespace(benchmarks-radix_tree ${CMAKE_CURRENT_SOURCE_DIR}/radix_tree/*.*pp)
+
 if (TEST_CONCURRENT_HASHMAP)
 	add_benchmark(concurrent_hash_map_insert_open concurrent_hash_map/insert_open.cpp)
+endif()
+
+if (TEST_RADIX_TREE)
+	add_benchmark(radix_tree_iteration radix_tree/iteration.cpp)
 endif()
