@@ -60,7 +60,6 @@ main(int argc, char *argv[])
 		}
 
 		std::string k;
-
 		while (std::cin >> k) {
 			r->kv->try_emplace(k, k);
 		}

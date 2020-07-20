@@ -301,7 +301,7 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 
 	template <typename... Args>
 	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 Args &&... args);
+					 size_t parent_idx, Args &&... args);
 
 	~leaf();
 
@@ -309,6 +309,7 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 	Value &value();
 
 	tagged_node_ptr parent = nullptr;
+	obj::p<size_t> parent_idx;
 
 private:
 	leaf() = default;
@@ -347,6 +348,7 @@ struct radix_tree<Key, Value, BytesView>::node {
 	 * Pointer to a parent node. Used by iterators.
 	 */
 	tagged_node_ptr parent;
+	obj::p<size_t> parent_idx;
 
 	/**
 	 * The embedded_entry ptr is used only for nodes for which length of the
@@ -724,7 +726,7 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
 	if (!root) {
-		transaction::run(pop, [&] { root = make_leaf(nullptr); });
+		transaction::run(pop, [&] { root = make_leaf(nullptr, 0); });
 
 		return {iterator(&root, &root), true};
 	}
@@ -769,7 +771,10 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	if (!n) {
 		assert(diff < min_key_len);
 
-		transaction::run(pop, [&] { *child_slot = make_leaf(prev); });
+		transaction::run(pop, [&] {
+			*child_slot = make_leaf(
+				prev, child_slot - &prev->embedded_entry);
+		});
 		return {iterator(child_slot, &root), true};
 	}
 
@@ -787,8 +792,9 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 				return {iterator(&n->embedded_entry, &root),
 					false};
 
-			transaction::run(
-				pop, [&] { n->embedded_entry = make_leaf(n); });
+			transaction::run(pop, [&] {
+				n->embedded_entry = make_leaf(n, 0);
+			});
 
 			return {iterator(&n->embedded_entry, &root), true};
 		}
@@ -798,13 +804,23 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 		tagged_node_ptr node;
 		transaction::run(pop, [&] {
 			node = make_persistent<radix_tree::node>();
-			node->embedded_entry = make_leaf(node);
+			node->embedded_entry = make_leaf(node, 0);
 			node->child[slice_index(leaf_key[diff], FIRST_NIB)] = n;
 			node->parent = parent_ref(n);
+			node->parent_idx =
+				child_slot - &parent_ref(n)->embedded_entry;
 			node->byte = diff;
 			node->bit = FIRST_NIB;
 
 			parent_ref(n) = node;
+			if (n.is_leaf())
+				n.get_leaf()->parent_idx =
+					slice_index(leaf_key[diff], FIRST_NIB) +
+					1;
+			else
+				n->parent_idx =
+					slice_index(leaf_key[diff], FIRST_NIB) +
+					1;
 
 			*child_slot = node;
 		});
@@ -822,12 +838,20 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 			node = make_persistent<radix_tree::node>();
 			node->embedded_entry = n;
 			node->child[slice_index(key[diff], FIRST_NIB)] =
-				make_leaf(node);
+				make_leaf(node,
+					  slice_index(key[diff], FIRST_NIB) +
+						  1);
 			node->parent = parent_ref(n);
+			node->parent_idx =
+				child_slot - &parent_ref(n)->embedded_entry;
 			node->byte = diff;
 			node->bit = FIRST_NIB;
 
 			parent_ref(n) = node;
+			if (n.is_leaf())
+				n.get_leaf()->parent_idx = 0;
+			else
+				n->parent_idx = 0;
 
 			*child_slot = node;
 		});
@@ -846,12 +870,19 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	transaction::run(pop, [&] {
 		node = make_persistent<radix_tree::node>();
 		node->child[slice_index(leaf_key[diff], sh)] = n;
-		node->child[slice_index(key[diff], sh)] = make_leaf(node);
+		node->child[slice_index(key[diff], sh)] =
+			make_leaf(node, slice_index(key[diff], sh) + 1);
 		node->parent = parent_ref(n);
+		node->parent_idx = child_slot - &parent_ref(n)->embedded_entry;
 		node->byte = diff;
 		node->bit = sh;
 
 		parent_ref(n) = node;
+		if (n.is_leaf())
+			n.get_leaf()->parent_idx =
+				slice_index(leaf_key[diff], sh) + 1;
+		else
+			n->parent_idx = slice_index(leaf_key[diff], sh) + 1;
 
 		*child_slot = node;
 	});
@@ -866,9 +897,9 @@ std::pair<typename radix_tree<Key, Value, BytesView>::iterator, bool>
 radix_tree<Key, Value, BytesView>::try_emplace(const_key_reference k,
 					       Args &&... args)
 {
-	return internal_emplace(k, [&](tagged_node_ptr parent) {
+	return internal_emplace(k, [&](tagged_node_ptr parent, size_t idx) {
 		size_++;
-		return leaf::make(parent, k, std::forward<Args>(args)...);
+		return leaf::make(parent, idx, k, std::forward<Args>(args)...);
 	});
 }
 
@@ -881,9 +912,11 @@ radix_tree<Key, Value, BytesView>::emplace(Args &&... args)
 	std::pair<iterator, bool> ret;
 
 	transaction::run(pop, [&] {
-		auto leaf_ = leaf::make(nullptr, std::forward<Args>(args)...);
-		auto make_leaf = [&](tagged_node_ptr parent) {
+		auto leaf_ =
+			leaf::make(nullptr, 0, std::forward<Args>(args)...);
+		auto make_leaf = [&](tagged_node_ptr parent, size_t idx) {
 			leaf_->parent = parent;
+			leaf_->parent_idx = idx;
 			size_++;
 			return leaf_;
 		};
@@ -1011,6 +1044,13 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 			? const_cast<tagged_node_ptr *>(parent->find_child(n))
 			: &root;
 		*child_slot = only_child;
+
+		if (only_child.is_leaf())
+			only_child.get_leaf()->parent_idx =
+				child_slot - &n->parent->embedded_entry;
+		else
+			only_child.get_node()->parent_idx =
+				child_slot - &n->parent->embedded_entry;
 
 		/* If iterator now points to only_child it mus be updated
 		 * (otherwise it would have reference to freed node). */
@@ -1236,7 +1276,8 @@ radix_tree<Key, Value, BytesView>::print_rec(std::ostream &os,
 
 		auto parent = n->parent ? n->parent.get_node() : 0;
 		os << "\"" << n.get_node() << "\" -> "
-		   << "\"" << parent << "\" [label=\"parent\"]" << std::endl;
+		   << "\"" << parent << "\" [label=\""
+		   << n.get_node()->parent_idx << "\"]" << std::endl;
 
 		for (auto it = n->begin(); it != n->end(); ++it) {
 			if (!(*it))
@@ -1266,7 +1307,8 @@ radix_tree<Key, Value, BytesView>::print_rec(std::ostream &os,
 			: nullptr;
 
 		os << "\"" << n.get_leaf() << "\" -> \"" << parent
-		   << "\" [label=\"parent\"]" << std::endl;
+		   << "\" [label=\"" << n.get_leaf()->parent_idx << "\"]"
+		   << std::endl;
 
 		if (parent && n == parent->embedded_entry) {
 			os << "{rank=same;\"" << parent << "\";\""
@@ -1606,8 +1648,11 @@ typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const *
 radix_tree<Key, Value, BytesView>::node::find_child(
 	radix_tree<Key, Value, BytesView>::tagged_node_ptr n) const
 {
-	return &*std::find(begin<direction::Forward>(),
-			   end<direction::Forward>(), n);
+	const tagged_node_ptr *a = &this->embedded_entry;
+
+	auto idx = n.is_leaf() ? n.get_leaf()->parent_idx : n->parent_idx;
+
+	return &a[idx];
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1679,8 +1724,9 @@ radix_tree<Key, Value, BytesView>::inline_string_reference<IsConst>::operator=(
 		auto old_leaf = leaf_->get_leaf();
 
 		transaction::run(pop, [&] {
-			*leaf_ = leaf::make(old_leaf->parent, old_leaf->key(),
-					    rhs);
+			*leaf_ = leaf::make(old_leaf->parent,
+					    old_leaf->parent_idx,
+					    old_leaf->key(), rhs);
 			delete_persistent<typename radix_tree::leaf>(old_leaf);
 		});
 	}
@@ -1872,10 +1918,12 @@ template <typename Key, typename Value, typename BytesView>
 template <typename... Args>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
 radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
+					      size_t parent_idx,
 					      Args &&... args)
 {
 	auto ptr = make_internal(std::forward<Args>(args)...);
 	ptr->parent = parent;
+	ptr->parent_idx = parent_idx;
 
 	return ptr;
 }
