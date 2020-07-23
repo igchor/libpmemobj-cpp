@@ -340,6 +340,44 @@ swap_test(nvobj::pool_base &pop)
 		UT_ASSERT(0);
 	}
 }
+
+void
+assignment_redo_test(nvobj::pool_base &pop)
+{
+	nvobj::persistent_ptr<root> r = init_foobar(pop);
+
+	try {
+		nvobj::experimental::actions_tx::run(pop.handle(), [&]{
+			r->foo_ptr->pint = 10;
+			UT_ASSERTeq(r->foo_ptr->pint, 10);
+
+			r->foo_ptr->pint = 11;
+			UT_ASSERTeq(r->foo_ptr->pint, 11);
+
+			throw pmem::manual_tx_abort("XXX");
+		});
+	} catch (pmem::manual_tx_abort &){
+
+	}
+
+	UT_ASSERTeq(r->foo_ptr->pint, 1);
+
+	try {
+		nvobj::experimental::actions_tx::run(pop.handle(), [&]{
+			r->foo_ptr->pint = 10;
+			UT_ASSERTeq(r->foo_ptr->pint, 10);
+
+			r->foo_ptr->pint = 11;
+			UT_ASSERTeq(r->foo_ptr->pint, 11);
+		});
+	} catch (pmem::manual_tx_abort &){
+
+	}
+
+	UT_ASSERTeq(r->foo_ptr->pint, 11);
+
+	cleanup_foobar(pop);
+}
 }
 
 static void
@@ -363,6 +401,8 @@ test(int argc, char *argv[])
 	bitwise_test(pop);
 	stream_test(pop);
 	swap_test(pop);
+
+	assignment_redo_test(pop);
 
 	pop.close();
 }

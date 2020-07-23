@@ -11,6 +11,8 @@
 
 #include <memory>
 
+#include <libpmemobj++/experimental/actions.hpp>
+
 #include <libpmemobj++/detail/common.hpp>
 #include <libpmemobj++/detail/specialization.hpp>
 
@@ -65,7 +67,16 @@ public:
 	p &
 	operator=(const p &rhs)
 	{
-		this_type(rhs).swap(*this);
+		detail::conditional_add_to_tx(this);
+
+		auto state = experimental::actions_tx::get_state();
+		if (!state) {
+			val = rhs.val;
+			return *this;
+		}
+
+		auto other_v = state->get(&rhs.val);
+		state->set(&this->val, other_v);
 
 		return *this;
 	}
@@ -96,7 +107,11 @@ public:
 	 */
 	operator T() const noexcept
 	{
-		return this->val;
+		auto state = experimental::actions_tx::get_state();
+		if (!state) 
+			return this->val;
+
+		return state->get(&this->val);
 	}
 
 	/**
@@ -141,7 +156,18 @@ public:
 	{
 		detail::conditional_add_to_tx(this);
 		detail::conditional_add_to_tx(&other);
-		std::swap(this->val, other.val);
+
+		auto state = experimental::actions_tx::get_state();
+		if (!state) {
+			std::swap(this->val, other.val);
+			return;
+		}
+
+		auto this_v = state->get(&this->val);
+		auto other_v = state->get(&other.val);
+
+		state->set(&this->val, other_v);
+		state->set(&other.val, this_v);
 	}
 
 private:
