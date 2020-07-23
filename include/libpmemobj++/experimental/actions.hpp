@@ -28,8 +28,7 @@ namespace experimental
 
 struct actions {
 
-	actions(PMEMobjpool *pop, std::size_t cap = 4)
-	    : pop(pop)
+	actions(PMEMobjpool *pop, std::size_t cap = 4) : pop(pop)
 	{
 		acts.reserve(cap);
 	}
@@ -38,21 +37,22 @@ struct actions {
 	void
 	set(T *w, T value)
 	{
-		auto it = wal.find((uint64_t*)w);
+		auto it = wal.find((uint64_t *)w);
 		if (it != wal.end())
-			it->second = (uint64_t) value;
+			it->second = (uint64_t)value;
 		else
-			wal.emplace((uint64_t*)w, value);
+			wal.emplace((uint64_t *)w, value);
 	}
 
 	template <typename T>
-	T get(T *addr)
+	T
+	get(T *addr)
 	{
-		auto it = wal.find((uint64_t*)addr);
+		auto it = wal.find((uint64_t *)addr);
 		if (it != wal.end())
-			return (T) it->second;
+			return (T)it->second;
 
-		return *((T*)addr);
+		return *((T *)addr);
 	}
 
 	template <typename T>
@@ -60,8 +60,7 @@ struct actions {
 	free(persistent_ptr<T> ptr)
 	{
 		acts.emplace_back();
-		pmemobj_defer_free(pop, ptr.raw(),
-				   &acts.back());
+		pmemobj_defer_free(pop, ptr.raw(), &acts.back());
 	}
 
 	template <typename T, typename... Args>
@@ -80,8 +79,14 @@ struct actions {
 	void
 	publish()
 	{
+		if (acts.size() == 0 && wal.size() == 0)
+			return;
+
 		acts.reserve(acts.size() + wal.size());
 		for (auto &v : wal) {
+			if (!pmemobj_pool_by_ptr(v.first))
+				continue;
+
 			acts.emplace_back();
 			pmemobj_set_value(pop, &acts.back(), v.first, v.second);
 		}
@@ -90,45 +95,66 @@ struct actions {
 			throw std::runtime_error("XXX");
 	}
 
-	void cancel() {
+	void
+	cancel()
+	{
+		if (acts.size() == 0 && wal.size() == 0)
+			return;
+
 		pmemobj_cancel(pop, acts.data(), acts.size());
 	}
 
 private:
 	std::vector<pobj_action> acts;
-	std::unordered_map<uint64_t*, uint64_t> wal;
-	PMEMobjpool* pop;
+	std::unordered_map<uint64_t *, uint64_t> wal;
+	PMEMobjpool *pop;
 };
 
 struct actions_tx {
-	static actions* get_state()
-    {
+	static actions *
+	get_state()
+	{
 		return state();
-    }
+	}
 
-	template <typename F, typename... Args>
-    static void run(PMEMobjpool* pop, F&& f, Args&&... args)
-    {
-		auto acts = std::unique_ptr<actions>(new actions(pop));
-		state() = acts.get();
+	template <typename F>
+	static
+	auto run(PMEMobjpool *pop, F &&f) -> decltype(std::declval<F>()())
+	{
+		auto init_s = state();
+		if (!init_s)
+			state() = new actions(pop);
+
+		decltype(std::declval<F>()()) ret;
 
 		try {
-        	f(std::forward<Args>(args)...);
+			ret = f();
 
-			acts->publish();
+			if (!init_s)
+				state()->publish();
 		} catch (...) {
-			acts->cancel();
-			state() = nullptr;
+			if (!init_s) {
+				state()->cancel();
+				delete state();
+			}
+
+			state() = init_s;
 			throw;
 		}
 
-		state() = nullptr;
-    }
+		if (!init_s)
+			delete state();
+
+		state() = init_s;
+
+		return ret;
+	}
 
 private:
-	static actions*& state()
+	static actions *&
+	state()
 	{
-		thread_local actions* a = nullptr;
+		thread_local actions *a = nullptr;
 		return a;
 	}
 };

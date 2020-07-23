@@ -347,7 +347,7 @@ assignment_redo_test(nvobj::pool_base &pop)
 	nvobj::persistent_ptr<root> r = init_foobar(pop);
 
 	try {
-		nvobj::experimental::actions_tx::run(pop.handle(), [&]{
+		nvobj::experimental::actions_tx::run(pop.handle(), [&] {
 			r->foo_ptr->pint = 10;
 			UT_ASSERTeq(r->foo_ptr->pint, 10);
 
@@ -355,23 +355,25 @@ assignment_redo_test(nvobj::pool_base &pop)
 			UT_ASSERTeq(r->foo_ptr->pint, 11);
 
 			throw pmem::manual_tx_abort("XXX");
+			
+			return 0;
 		});
-	} catch (pmem::manual_tx_abort &){
-
+	} catch (pmem::manual_tx_abort &) {
 	}
 
 	UT_ASSERTeq(r->foo_ptr->pint, 1);
 
 	try {
-		nvobj::experimental::actions_tx::run(pop.handle(), [&]{
+		nvobj::experimental::actions_tx::run(pop.handle(), [&] {
 			r->foo_ptr->pint = 10;
 			UT_ASSERTeq(r->foo_ptr->pint, 10);
 
 			r->foo_ptr->pint = 11;
 			UT_ASSERTeq(r->foo_ptr->pint, 11);
-		});
-	} catch (pmem::manual_tx_abort &){
 
+			return 0;
+		});
+	} catch (pmem::manual_tx_abort &) {
 	}
 
 	UT_ASSERTeq(r->foo_ptr->pint, 11);

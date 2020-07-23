@@ -47,7 +47,14 @@ template <typename T>
 p<T> &
 operator++(p<T> &pp)
 {
-	++(pp.get_rw());
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		++(pp.get_rw());
+	} else {
+		auto old = state->get(&pp.get_rw());
+		state->set(&pp.get_rw(), old + 1);
+	}
+
 	return pp;
 }
 
@@ -58,7 +65,14 @@ template <typename T>
 p<T> &
 operator--(p<T> &pp)
 {
-	--(pp.get_rw());
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		--(pp.get_rw());
+	} else {
+		auto old = state->get(&pp.get_rw());
+		state->set(&pp.get_rw(), old - 1);
+	}
+
 	return pp;
 }
 
@@ -93,7 +107,15 @@ template <typename T, typename Y>
 p<T> &
 operator+=(p<T> &lhs, const p<Y> &rhs)
 {
-	lhs.get_rw() += rhs.get_ro();
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() += rhs.get_ro();
+	} else {
+		auto old = state->get(&rhs.get_rw());
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old + old_lhs);
+	}
+
 	return lhs;
 }
 
@@ -104,7 +126,15 @@ template <typename T, typename Y>
 p<T> &
 operator+=(p<T> &lhs, const Y &rhs)
 {
-	lhs.get_rw() += rhs;
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() += rhs;
+	} else {
+		auto old = state->get(&rhs);
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old + old_lhs);
+	}
+
 	return lhs;
 }
 
@@ -203,7 +233,15 @@ template <typename T, typename Y>
 p<T> &
 operator&=(p<T> &lhs, const p<Y> &rhs)
 {
-	lhs.get_rw() &= rhs.get_ro();
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() &= rhs.get_ro();
+	} else {
+		auto old = state->get(&rhs.get_rw());
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old & old_lhs);
+	}
+
 	return lhs;
 }
 
@@ -214,7 +252,15 @@ template <typename T, typename Y>
 p<T> &
 operator&=(p<T> &lhs, const Y &rhs)
 {
-	lhs.get_rw() &= rhs;
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() &= rhs;
+	} else {
+		auto old = state->get(&rhs);
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old & old_lhs);
+	}
+
 	return lhs;
 }
 
@@ -225,7 +271,15 @@ template <typename T, typename Y>
 p<T> &
 operator|=(p<T> &lhs, const p<Y> &rhs)
 {
-	lhs.get_rw() |= rhs.get_ro();
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() |= rhs.get_ro();
+	} else {
+		auto old = state->get(&rhs.get_rw());
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old | old_lhs);
+	}
+
 	return lhs;
 }
 
@@ -236,7 +290,15 @@ template <typename T, typename Y>
 p<T> &
 operator|=(p<T> &lhs, const Y &rhs)
 {
-	lhs.get_rw() |= rhs;
+	auto state = experimental::actions_tx::get_state();
+	if (!state) {
+		lhs.get_rw() |= rhs;
+	} else {
+		auto old = state->get(&rhs);
+		auto old_lhs = state->get(&lhs.get_rw());
+		state->set(&lhs.get_rw(), old | old_lhs);
+	}
+
 	return lhs;
 }
 

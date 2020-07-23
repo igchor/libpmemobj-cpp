@@ -108,7 +108,7 @@ public:
 	operator T() const noexcept
 	{
 		auto state = experimental::actions_tx::get_state();
-		if (!state) 
+		if (!state)
 			return this->val;
 
 		return state->get(&this->val);

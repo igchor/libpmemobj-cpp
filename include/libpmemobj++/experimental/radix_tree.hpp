@@ -28,6 +28,8 @@
 #include <bit>
 #endif
 
+#include <libpmemobj++/experimental/actions.hpp>
+
 #include <libpmemobj++/detail/common.hpp>
 #include <libpmemobj++/detail/integer_sequence.hpp>
 
@@ -312,6 +314,8 @@ template <typename Key, typename Value, typename BytesView>
 struct radix_tree<Key, Value, BytesView>::leaf {
 	using tree_type = radix_tree<Key, Value, BytesView>;
 
+	leaf() = default;
+
 	template <typename... Args>
 	static persistent_ptr<leaf> make(tagged_node_ptr parent,
 					 Args &&... args);
@@ -324,8 +328,6 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 	tagged_node_ptr parent = nullptr;
 
 private:
-	leaf() = default;
-
 	static persistent_ptr<leaf> make_internal();
 
 	template <typename... Args1, typename... Args2>
@@ -817,103 +819,115 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	auto key = bytes_view(k);
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
-	if (!root) {
-		transaction::run(pop, [&] { this->root = make_leaf(nullptr); });
+	return actions_tx::run(pop.handle(), [&] {
+		auto acts = actions_tx::get_state();
 
-		return {iterator(&root, &root), true};
-	}
-
-	/*
-	 * Need to descend the tree twice: first to find a leaf that
-	 * represents a subtree that shares a common prefix with the key.
-	 */
-	auto leaf = descend(key);
-	auto leaf_key = bytes_view(leaf->key());
-	auto diff = prefix_diff(key, leaf_key);
-
-	auto n = root;
-	auto child_slot = &root;
-	auto prev = n;
-
-	auto min_key_len = (std::min)(leaf_key.size(), key.size());
-	bitn_t sh = 8;
-
-	/* If key differs from leaf_key at some point (neither is a prefix of
-	 * another) we will descend to the point of divergence. Otherwise we
-	 * will look for a node which represents the prefix. */
-	if (diff < min_key_len) {
-		auto at =
-			static_cast<unsigned char>(leaf_key[diff] ^ key[diff]);
-		sh = pmem::detail::mssb_index((uint32_t)at) & SLICE_MASK;
-	}
-
-	/* Descend into the tree again. */
-	while (n && !n.is_leaf() &&
-	       (n->byte < diff || (n->byte == diff && n->bit >= sh))) {
-		prev = n;
-		child_slot = &n->child[slice_index(key[n->byte], n->bit)];
-		n = *child_slot;
-	}
-
-	/*
-	 * If the divergence point is at same nib as an existing node, and
-	 * the subtree there is empty, just place our leaf there and we're
-	 * done.  Obviously this can't happen if SLICE == 1.
-	 */
-	if (!n) {
-		assert(diff < min_key_len);
-
-		transaction::run(pop, [&] { *child_slot = make_leaf(prev); });
-		return {iterator(child_slot, &root), true};
-	}
-
-	/* New key is a prefix of the leaf key or they are equal. We need to add
-	 * leaf ptr to internal node. */
-	if (diff == key.size()) {
-		if (n.is_leaf() &&
-		    bytes_view(n.get_leaf()->key()).size() == key.size()) {
-			/* Key exists. */
-			return {iterator(child_slot, &root), false};
+		if (!root) {
+			this->root = make_leaf(nullptr);
+			return std::pair<iterator, bool>{iterator(&root, &root), true};
 		}
 
-		if (!n.is_leaf() && path_length_equal(key.size(), n)) {
-			if (n->embedded_entry)
-				return {iterator(&n->embedded_entry, &root),
-					false};
+		/*
+		 * Need to descend the tree twice: first to find a leaf that
+		 * represents a subtree that shares a common prefix with the
+		 * key.
+		 */
+		auto leaf = descend(key);
+		auto leaf_key = bytes_view(leaf->key());
+		auto diff = prefix_diff(key, leaf_key);
 
-			transaction::run(
-				pop, [&] { n->embedded_entry = make_leaf(n); });
+		auto n = root;
+		auto child_slot = &root;
+		auto prev = n;
 
-			return {iterator(&n->embedded_entry, &root), true};
+		auto min_key_len = (std::min)(leaf_key.size(), key.size());
+		bitn_t sh = 8;
+
+		/* If key differs from leaf_key at some point (neither is a
+		 * prefix of another) we will descend to the point of
+		 * divergence. Otherwise we will look for a node which
+		 * represents the prefix. */
+		if (diff < min_key_len) {
+			auto at = static_cast<unsigned char>(leaf_key[diff] ^
+							     key[diff]);
+			sh = pmem::detail::mssb_index((uint32_t)at) &
+				SLICE_MASK;
 		}
 
-		/* Path length from root to n is longer than key.size().
-		 * We have to allocate new internal node above n. */
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			node = make_persistent<radix_tree::node>();
-			node->embedded_entry = make_leaf(node);
-			node->child[slice_index(leaf_key[diff], FIRST_NIB)] = n;
-			node->parent = parent_ref(n);
-			node->byte = diff;
-			node->bit = FIRST_NIB;
+		/* Descend into the tree again. */
+		while (n && !n.is_leaf() &&
+		       (n->byte < diff || (n->byte == diff && n->bit >= sh))) {
+			prev = n;
+			child_slot =
+				&n->child[slice_index(key[n->byte], n->bit)];
+			n = *child_slot;
+		}
 
-			parent_ref(n) = node;
+		/*
+		 * If the divergence point is at same nib as an existing node,
+		 * and the subtree there is empty, just place our leaf there and
+		 * we're done.  Obviously this can't happen if SLICE == 1.
+		 */
+		if (!n) {
+			assert(diff < min_key_len);
 
-			*child_slot = node;
-		});
+			*child_slot = make_leaf(prev);
+			return std::pair<iterator, bool>{iterator(child_slot, &root), true};
+		}
 
-		return {iterator(&node->embedded_entry, &root), true};
-	}
+		/* New key is a prefix of the leaf key or they are equal. We
+		 * need to add leaf ptr to internal node. */
+		if (diff == key.size()) {
+			if (n.is_leaf() &&
+			    bytes_view(n.get_leaf()->key()).size() ==
+				    key.size()) {
+				/* Key exists. */
+				return std::pair<iterator, bool>{iterator(child_slot, &root), false};
+			}
 
-	if (diff == leaf_key.size()) {
-		/* Leaf key is a prefix of the new key. We need to convert leaf
-		 * to a node. */
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			/* We have to add new node at the edge from parent to n
+			if (!n.is_leaf() && path_length_equal(key.size(), n)) {
+				if (n->embedded_entry)
+					return std::pair<iterator, bool>{iterator(&n->embedded_entry,
+							 &root),
+						false};
+
+				n->embedded_entry = make_leaf(n);
+
+				return std::pair<iterator, bool>{iterator(&n->embedded_entry, &root),
+					true};
+
+				/* Path length from root to n is longer than
+				 * key.size().
+				 * We have to allocate new internal node above
+				 * n. */
+				tagged_node_ptr node;
+				node = acts->make<radix_tree::node>(
+					sizeof(radix_tree::node));
+				node->embedded_entry = make_leaf(node);
+				node->child[slice_index(leaf_key[diff],
+							FIRST_NIB)] = n;
+				node->parent = parent_ref(n);
+				node->byte = diff;
+				node->bit = FIRST_NIB;
+
+				parent_ref(n) = node;
+
+				*child_slot = node;
+
+				return std::pair<iterator, bool>{iterator(&node->embedded_entry, &root),
+					true};
+			}
+		}
+
+		if (diff == leaf_key.size()) {
+			/* Leaf key is a prefix of the new key. We need
+			 * to convert leaf to a node. */
+			tagged_node_ptr node;
+			/* We have to add new node at the edge from
+			 * parent to n
 			 */
-			node = make_persistent<radix_tree::node>();
+			node = acts->make<radix_tree::node>(
+				sizeof(radix_tree::node));
 			node->embedded_entry = n;
 			node->child[slice_index(key[diff], FIRST_NIB)] =
 				make_leaf(node);
@@ -924,21 +938,19 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 			parent_ref(n) = node;
 
 			*child_slot = node;
-		});
 
-		return {iterator(
-				&node->child[slice_index(key[diff], FIRST_NIB)],
-				&root),
-			true};
-	}
+			return std::pair<iterator, bool>{iterator(&node->child[slice_index(key[diff],
+								  FIRST_NIB)],
+					 &root),
+				true};
+		}
 
-	/* There is already a subtree at the divergence point
-	 * (slice_index(key[diff], sh)). This means that a tree is vertically
-	 * compressed and we have to "break" this compression and add a new
-	 * node. */
-	tagged_node_ptr node;
-	transaction::run(pop, [&] {
-		node = make_persistent<radix_tree::node>();
+		/* There is already a subtree at the divergence point
+		 * (slice_index(key[diff], sh)). This means that a tree
+		 * is vertically compressed and we have to "break" this
+		 * compression and add a new node. */
+		tagged_node_ptr node;
+		node = acts->make<radix_tree::node>(sizeof(radix_tree::node));
 		node->child[slice_index(leaf_key[diff], sh)] = n;
 		node->child[slice_index(key[diff], sh)] = make_leaf(node);
 		node->parent = parent_ref(n);
@@ -948,10 +960,11 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 		parent_ref(n) = node;
 
 		*child_slot = node;
-	});
 
-	return {iterator(&node->child[slice_index(key[diff], sh)], &root),
-		true};
+		return std::pair<iterator, bool>{iterator(&node->child[slice_index(key[diff], sh)],
+				 &root),
+			true};
+	});
 }
 
 /**
@@ -1187,7 +1200,8 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 		}
 
 		if (only_child && n->embedded_entry) {
-			/* There are actually 2 "children" so we can't compress.
+			/* There are actually 2 "children" so we can't
+			 * compress.
 			 */
 			return;
 		} else if (n->embedded_entry) {
@@ -1202,8 +1216,9 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 			: &root;
 		*child_slot = only_child;
 
-		/* If iterator now points to only_child it mus be updated
-		 * (otherwise it would have reference to freed node). */
+		/* If iterator now points to only_child it mus be
+		 * updated (otherwise it would have reference to freed
+		 * node). */
 		if (pos.node && *pos.node == only_child)
 			pos.node = child_slot;
 
@@ -1573,7 +1588,7 @@ radix_tree<Key, Value, BytesView>::print_rec(std::ostream &os,
 		os << "\"" << n.get_leaf() << "\" [label=\"key:";
 
 		for (size_t i = 0; i < bv.size(); i++)
-			os << bv[i];
+			os << int(bv[i]);
 
 		os << "\"]" << std::endl;
 
@@ -2295,17 +2310,16 @@ radix_tree<Key, Value, BytesView>::leaf::make_internal(
 	std::tuple<Args2...> &second_args, detail::index_sequence<I1...>,
 	detail::index_sequence<I2...>)
 {
-	standard_alloc_policy<void> a;
 	auto key_size = real_size<Key>::value(std::get<I1>(first_args)...);
 	auto val_size = real_size<Value>::value(std::get<I2>(second_args)...);
-	auto ptr = static_cast<persistent_ptr<leaf>>(
-		a.allocate(sizeof(leaf) + key_size + val_size));
+
+	auto acts = actions_tx::get_state();
+	auto ptr = acts->make<leaf>(sizeof(leaf) + key_size + val_size);
 
 	auto key_dst = reinterpret_cast<Key *>(ptr.get() + 1);
 	auto val_dst = reinterpret_cast<Value *>(
 		reinterpret_cast<char *>(key_dst) + key_size);
 
-	new (ptr.get()) leaf();
 	new (key_dst) Key(std::forward<Args1>(std::get<I1>(first_args))...);
 	new (val_dst) Value(std::forward<Args2>(std::get<I2>(second_args))...);
 
