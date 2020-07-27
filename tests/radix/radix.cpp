@@ -71,12 +71,29 @@ test_assign(nvobj::pool<root> &pop, nvobj::persistent_ptr<Container> &ptr)
 		it = ptr->find(key<Container>(test_key));
 		it.value() = value_f(test_value);
 
-		UT_ASSERT(it.value() == value_f(test_value));
-		UT_ASSERT(ptr->find(key<Container>(test_key)).value() ==
-			  value_f(test_value));
+		if (!std::is_same<typename Container::mapped_type,
+				  nvobjex::inline_string>::value) {
+			/* Iterators and references for inline_string are not
+			 * stable. */
+			UT_ASSERT(it.value() == value_f(test_value));
+			UT_ASSERT(ptr->find(key<Container>(test_key)).value() ==
+				  value_f(test_value));
+
+			++it;
+			UT_ASSERT(it.key() == key<Container>(test_key + 1));
+			UT_ASSERT(it.value() == value_f(test_key + 1));
+
+			--it;
+			--it;
+			UT_ASSERT(it.key() == key<Container>(test_key - 1));
+			UT_ASSERT(it.value() == value_f(test_key - 1));
+
+			++it;
+		}
 	});
 
 	verify_elements(ptr, 10, value_f);
+
 	UT_ASSERT(it.value() == value_f(test_key));
 
 	++it;
@@ -122,8 +139,13 @@ test_assign_internal_leaf(nvobj::pool<root> &pop,
 		it = ptr->find("");
 		it.value() = value_f(new_value);
 
-		UT_ASSERT(it.value() == value_f(new_value));
-		UT_ASSERT(ptr->find("").value() == value_f(new_value));
+		if (!std::is_same<typename Container::mapped_type,
+				  nvobjex::inline_string>::value) {
+			/* Iterators and references for inline_string are not
+			 * stable. */
+			UT_ASSERT(it.value() == value_f(new_value));
+			UT_ASSERT(ptr->find("").value() == value_f(new_value));
+		}
 	});
 
 	UT_ASSERTeq(ptr->size(), 11);
@@ -134,8 +156,14 @@ test_assign_internal_leaf(nvobj::pool<root> &pop,
 		it = ptr->find("aaa");
 		it.value() = value_f(new_value);
 
-		UT_ASSERT(it.value() == value_f(new_value));
-		UT_ASSERT(ptr->find("aaa").value() == value_f(new_value));
+		if (!std::is_same<typename Container::mapped_type,
+				  nvobjex::inline_string>::value) {
+			/* Iterators and references for inline_string are not
+			 * stable. */
+			UT_ASSERT(it.value() == value_f(new_value));
+			UT_ASSERT(ptr->find("aaa").value() ==
+				  value_f(new_value));
+		}
 	});
 
 	UT_ASSERTeq(ptr->size(), 11);
@@ -169,8 +197,14 @@ test_assign_root(nvobj::pool<root> &pop, nvobj::persistent_ptr<Container> &ptr)
 		it = ptr->find(key<Container>(0));
 		it.value() = value_f(1);
 
-		UT_ASSERT(it.value() == value_f(1));
-		UT_ASSERT(ptr->find(key<Container>(0)).value() == value_f(1));
+		if (!std::is_same<typename Container::mapped_type,
+				  nvobjex::inline_string>::value) {
+			/* Iterators and references for inline_string are not
+			 * stable. */
+			UT_ASSERT(it.value() == value_f(1));
+			UT_ASSERT(ptr->find(key<Container>(0)).value() ==
+				  value_f(1));
+		}
 	});
 
 	verify_elements(ptr, 1, value_f);

@@ -73,6 +73,15 @@ namespace experimental
  * By default, implementation for pmem::obj::inline_string and unsigned integral
  * types is provided. Note that integral types are assumed to be in
  * little-endian.
+ * 
+ * Iterators and reference are stable (are not invalidated by inserts or erases
+ * of other elements nor by assigning to the value) for all value types except
+ * inline_string.
+ *
+ * In case of inline_string iterators and reference are not invalidated by other
+ * inserts or erases but might be invalidated by assigning new value to the element.
+ * Using (*find(K)).second = "new_value" might invalidate other iterators
+ * and references to the element with key K.
  *
  * An example of custom BytesView implementation:
  * @snippet radix_tree/radix_tree_custom_key.cpp bytes_view_example
@@ -235,18 +244,17 @@ private:
 	template <typename F, class... Args>
 	std::pair<iterator, bool> internal_emplace(const_key_reference k, F &&);
 	template <typename K>
-	const_iterator internal_find(const K &k) const;
+	leaf *internal_find(const K &k) const;
 
 	static tagged_node_ptr &parent_ref(tagged_node_ptr n);
 	template <typename K1, typename K2>
 	static bool keys_equal(const K1 &k1, const K2 &k2);
 	template <typename K1, typename K2>
 	static int compare(const K1 &k1, const K2 &k2);
+	template <bool Direction, typename Ptr>
+	static leaf *next_leaf(const Ptr &child, tagged_node_ptr parent);
 	template <bool Direction>
-	static const tagged_node_ptr *next_leaf(const tagged_node_ptr *child,
-						tagged_node_ptr parent);
-	template <bool Direction>
-	static const tagged_node_ptr &find_leaf(tagged_node_ptr const &n);
+	static leaf *find_leaf(tagged_node_ptr n);
 	static unsigned slice_index(char k, uint8_t shift);
 	template <typename K1, typename K2>
 	static byten_t prefix_diff(const K1 &lhs, const K2 &rhs);
@@ -281,6 +289,9 @@ struct radix_tree<Key, Value, BytesView>::tagged_node_ptr {
 
 	bool operator==(const tagged_node_ptr &rhs) const;
 	bool operator!=(const tagged_node_ptr &rhs) const;
+
+	bool operator==(const radix_tree::leaf *rhs) const;
+	bool operator!=(const radix_tree::leaf *rhs) const;
 
 	bool is_leaf() const;
 
@@ -320,6 +331,8 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 
 	Key &key();
 	Value &value();
+	const Key &key() const;
+	const Value &value() const;
 
 	tagged_node_ptr parent = nullptr;
 
@@ -433,26 +446,8 @@ struct radix_tree<Key, Value, BytesView>::node {
 				    BytesView>::node::reverse_iterator>::type
 	end() const;
 
-	template <bool Direction = direction::Forward>
-	const tagged_node_ptr *find_child(tagged_node_ptr n) const;
-
-	template <bool Direction>
-	typename std::enable_if<
-		Direction ==
-			radix_tree<Key, Value,
-				   BytesView>::node::direction::Forward,
-		typename radix_tree<Key, Value,
-				    BytesView>::node::forward_iterator>::type
-	make_iterator(const tagged_node_ptr *child) const;
-
-	template <bool Direction>
-	typename std::enable_if<
-		Direction ==
-			radix_tree<Key, Value,
-				   BytesView>::node::direction::Reverse,
-		typename radix_tree<Key, Value,
-				    BytesView>::node::reverse_iterator>::type
-	make_iterator(const tagged_node_ptr *child) const;
+	template <bool Direction = direction::Forward, typename Ptr>
+	auto find_child(const Ptr &n) const -> decltype(begin<Direction>());
 
 	uint8_t padding[256 - sizeof(parent) - sizeof(leaf) - sizeof(child) -
 			sizeof(byte) - sizeof(bit)];
@@ -467,15 +462,19 @@ struct radix_tree<Key, Value, BytesView>::inline_string_reference {
 	inline_string_reference &operator=(string_view rhs);
 
 private:
+	using leaf_ptr =
+		typename std::conditional<IsConst, const leaf *,
+					  leaf *>::type;
 	using node_ptr =
 		typename std::conditional<IsConst, const tagged_node_ptr *,
 					  tagged_node_ptr *>::type;
 
-	node_ptr leaf_ = nullptr;
+	leaf_ptr leaf_ = nullptr;
+	node_ptr root = nullptr;
 
 	friend class radix_tree<Key, Value, BytesView>;
 
-	inline_string_reference(node_ptr leaf_) noexcept;
+	inline_string_reference(leaf_ptr leaf_, node_ptr root) noexcept;
 };
 
 /**
@@ -487,6 +486,8 @@ template <typename Key, typename Value, typename BytesView>
 template <bool IsConst>
 struct radix_tree<Key, Value, BytesView>::radix_tree_iterator {
 private:
+	using leaf_ptr =
+		typename std::conditional<IsConst, const leaf *, leaf *>::type;
 	using node_ptr =
 		typename std::conditional<IsConst, const tagged_node_ptr *,
 					  tagged_node_ptr *>::type;
@@ -514,7 +515,7 @@ private:
 
 public:
 	radix_tree_iterator() = default;
-	radix_tree_iterator(node_ptr node, node_ptr root);
+	radix_tree_iterator(leaf_ptr leaf_, node_ptr root);
 	radix_tree_iterator(const radix_tree_iterator &rhs) = default;
 
 	template <bool C = IsConst,
@@ -551,7 +552,7 @@ public:
 private:
 	friend class radix_tree;
 
-	node_ptr node = nullptr;
+	leaf_ptr leaf_ = nullptr;
 	node_ptr root = nullptr;
 };
 
@@ -819,8 +820,7 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 
 	if (!root) {
 		transaction::run(pop, [&] { this->root = make_leaf(nullptr); });
-
-		return {iterator(&root, &root), true};
+		return {iterator(root.get_leaf(), &root), true};
 	}
 
 	/*
@@ -864,7 +864,7 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 		assert(diff < min_key_len);
 
 		transaction::run(pop, [&] { *child_slot = make_leaf(prev); });
-		return {iterator(child_slot, &root), true};
+		return {iterator(child_slot->get_leaf(), &root), true};
 	}
 
 	/* New key is a prefix of the leaf key or they are equal. We need to add
@@ -873,18 +873,20 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 		if (n.is_leaf() &&
 		    bytes_view(n.get_leaf()->key()).size() == key.size()) {
 			/* Key exists. */
-			return {iterator(child_slot, &root), false};
+			return {iterator(child_slot->get_leaf(), &root), false};
 		}
 
 		if (!n.is_leaf() && path_length_equal(key.size(), n)) {
 			if (n->embedded_entry)
-				return {iterator(&n->embedded_entry, &root),
+				return {iterator(n->embedded_entry.get_leaf(),
+						 &root),
 					false};
 
 			transaction::run(
 				pop, [&] { n->embedded_entry = make_leaf(n); });
 
-			return {iterator(&n->embedded_entry, &root), true};
+			return {iterator(n->embedded_entry.get_leaf(), &root),
+				true};
 		}
 
 		/* Path length from root to n is longer than key.size().
@@ -903,7 +905,7 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 			*child_slot = node;
 		});
 
-		return {iterator(&node->embedded_entry, &root), true};
+		return {iterator(node->embedded_entry.get_leaf(), &root), true};
 	}
 
 	if (diff == leaf_key.size()) {
@@ -926,9 +928,9 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 			*child_slot = node;
 		});
 
-		return {iterator(
-				&node->child[slice_index(key[diff], FIRST_NIB)],
-				&root),
+		return {iterator(node->child[slice_index(key[diff], FIRST_NIB)]
+					 .get_leaf(),
+				 &root),
 			true};
 	}
 
@@ -950,7 +952,8 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 		*child_slot = node;
 	});
 
-	return {iterator(&node->child[slice_index(key[diff], sh)], &root),
+	return {iterator(node->child[slice_index(key[diff], sh)].get_leaf(),
+			 &root),
 		true};
 }
 
@@ -1068,9 +1071,7 @@ template <typename Key, typename Value, typename BytesView>
 typename radix_tree<Key, Value, BytesView>::iterator
 radix_tree<Key, Value, BytesView>::find(const_key_reference k)
 {
-	return iterator(
-		const_cast<typename iterator::node_ptr>(internal_find(k).node),
-		&root);
+	return iterator(internal_find(k), &root);
 }
 
 /**
@@ -1085,37 +1086,33 @@ template <typename Key, typename Value, typename BytesView>
 typename radix_tree<Key, Value, BytesView>::const_iterator
 radix_tree<Key, Value, BytesView>::find(const_key_reference k) const
 {
-	return internal_find(k);
+	return const_iterator(internal_find(k), &root);
 }
 
 template <typename Key, typename Value, typename BytesView>
 template <typename K>
-typename radix_tree<Key, Value, BytesView>::const_iterator
+typename radix_tree<Key, Value, BytesView>::leaf *
 radix_tree<Key, Value, BytesView>::internal_find(const K &k) const
 {
 	auto key = bytes_view(k);
 
 	auto n = root;
-	auto child_slot = &root;
 	while (n && !n.is_leaf()) {
 		if (path_length_equal(key.size(), n))
-			child_slot = &n->embedded_entry;
+			n = n->embedded_entry;
 		else if (n->byte > key.size())
-			return end();
+			return nullptr;
 		else
-			child_slot =
-				&n->child[slice_index(key[n->byte], n->bit)];
-
-		n = *child_slot;
+			n = n->child[slice_index(key[n->byte], n->bit)];
 	}
 
 	if (!n)
-		return end();
+		return nullptr;
 
 	if (!keys_equal(key, bytes_view(n.get_leaf()->key())))
-		return end();
+		return nullptr;
 
-	return const_iterator(child_slot, &root);
+	return n.get_leaf();
 }
 
 /**
@@ -1155,10 +1152,11 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
 	transaction::run(pop, [&] {
-		auto *leaf = const_cast<typename iterator::node_ptr>(pos.node);
-		auto parent = leaf->get_leaf()->parent;
+		auto *leaf = pos.leaf_;
+		auto parent = leaf->parent;
 
-		delete_persistent<radix_tree::leaf>(leaf->get_leaf());
+		delete_persistent<radix_tree::leaf>(
+			persistent_ptr<radix_tree::leaf>(leaf));
 
 		size_--;
 
@@ -1170,7 +1168,8 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 		}
 
 		++pos;
-		*leaf = nullptr;
+		const_cast<tagged_node_ptr &>(*parent->find_child(leaf)) =
+			nullptr;
 
 		/* Compress the tree vertically. */
 		auto n = parent;
@@ -1198,19 +1197,14 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 		parent_ref(only_child) = n->parent;
 
 		auto *child_slot = parent
-			? const_cast<tagged_node_ptr *>(parent->find_child(n))
+			? const_cast<tagged_node_ptr *>(&*parent->find_child(n))
 			: &root;
 		*child_slot = only_child;
-
-		/* If iterator now points to only_child it mus be updated
-		 * (otherwise it would have reference to freed node). */
-		if (pos.node && *pos.node == only_child)
-			pos.node = child_slot;
 
 		delete_persistent<radix_tree::node>(n.get_node());
 	});
 
-	return iterator(const_cast<typename iterator::node_ptr>(pos.node),
+	return iterator(const_cast<typename iterator::leaf_ptr>(pos.leaf_),
 			&root);
 }
 
@@ -1239,7 +1233,7 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator first,
 			first = erase(first);
 	});
 
-	return iterator(const_cast<typename iterator::node_ptr>(first.node),
+	return iterator(const_cast<typename iterator::leaf_ptr>(first.leaf_),
 			&root);
 }
 
@@ -1287,7 +1281,6 @@ radix_tree<Key, Value, BytesView>::lower_bound(const_key_reference k) const
 
 	auto n = root;
 	decltype(n) prev;
-	const decltype(n) *child_slot = &root;
 
 	if (!root)
 		return end();
@@ -1296,29 +1289,25 @@ radix_tree<Key, Value, BytesView>::lower_bound(const_key_reference k) const
 		prev = n;
 
 		if (path_length_equal(key.size(), n))
-			child_slot = &n->embedded_entry;
+			n = n->embedded_entry;
 		else if (n->byte > key.size())
 			return const_iterator(
-				&find_leaf<node::direction::Forward>(n), &root);
+				find_leaf<node::direction::Forward>(n), &root);
 		else
-			child_slot =
-				&n->child[slice_index(key[n->byte], n->bit)];
-
-		n = *child_slot;
+			n = n->child[slice_index(key[n->byte], n->bit)];
 	}
 
 	if (!n) {
 		return const_iterator(
-			next_leaf<node::direction::Forward>(child_slot, prev),
-			&root);
+			next_leaf<node::direction::Forward>(n, prev), &root);
 	}
 
 	assert(n.is_leaf());
 
 	if (compare(bytes_view(n.get_leaf()->key()), key) >= 0)
-		return const_iterator(child_slot, &root);
+		return const_iterator(n.get_leaf(), &root);
 
-	return ++const_iterator(child_slot, &root);
+	return ++const_iterator(n.get_leaf(), &root);
 }
 
 /**
@@ -1336,7 +1325,7 @@ typename radix_tree<Key, Value, BytesView>::iterator
 radix_tree<Key, Value, BytesView>::lower_bound(const_key_reference k)
 {
 	auto it = const_cast<const radix_tree *>(this)->lower_bound(k);
-	return iterator(const_cast<typename iterator::node_ptr>(it.node),
+	return iterator(const_cast<typename iterator::leaf_ptr>(it.leaf_),
 			&root);
 }
 
@@ -1379,7 +1368,7 @@ typename radix_tree<Key, Value, BytesView>::iterator
 radix_tree<Key, Value, BytesView>::upper_bound(const_key_reference k)
 {
 	auto it = const_cast<const radix_tree *>(this)->upper_bound(k);
-	return iterator(const_cast<typename iterator::node_ptr>(it.node),
+	return iterator(const_cast<typename iterator::leaf_ptr>(it.leaf_),
 			&root);
 }
 
@@ -1395,7 +1384,7 @@ radix_tree<Key, Value, BytesView>::begin()
 {
 	auto const_begin = const_cast<const radix_tree *>(this)->begin();
 	return iterator(
-		const_cast<typename iterator::node_ptr>(const_begin.node),
+		const_cast<typename iterator::leaf_ptr>(const_begin.leaf_),
 		&root);
 }
 
@@ -1411,8 +1400,9 @@ typename radix_tree<Key, Value, BytesView>::iterator
 radix_tree<Key, Value, BytesView>::end()
 {
 	auto const_end = const_cast<const radix_tree *>(this)->end();
-	return iterator(const_cast<typename iterator::node_ptr>(const_end.node),
-			&root);
+	return iterator(
+		const_cast<typename iterator::leaf_ptr>(const_end.leaf_),
+		&root);
 }
 
 /**
@@ -1429,7 +1419,7 @@ radix_tree<Key, Value, BytesView>::cbegin() const
 		return const_iterator(nullptr, &root);
 
 	return const_iterator(
-		&radix_tree::find_leaf<radix_tree::node::direction::Forward>(
+		radix_tree::find_leaf<radix_tree::node::direction::Forward>(
 			root),
 		&root);
 }
@@ -1742,6 +1732,22 @@ radix_tree<Key, Value, BytesView>::tagged_node_ptr::operator!=(
 
 template <typename Key, typename Value, typename BytesView>
 bool
+radix_tree<Key, Value, BytesView>::tagged_node_ptr::operator==(
+	const radix_tree::leaf *rhs) const
+{
+	return is_leaf() && get_leaf() == rhs;
+}
+
+template <typename Key, typename Value, typename BytesView>
+bool
+radix_tree<Key, Value, BytesView>::tagged_node_ptr::operator!=(
+	const radix_tree::leaf *rhs) const
+{
+	return !(*this == rhs);
+}
+
+template <typename Key, typename Value, typename BytesView>
+bool
 radix_tree<Key, Value, BytesView>::tagged_node_ptr::is_leaf() const
 {
 	return off & unsigned(IS_LEAF);
@@ -1913,46 +1919,19 @@ radix_tree<Key, Value, BytesView>::node::end() const
 }
 
 template <typename Key, typename Value, typename BytesView>
-template <bool Direction>
-typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const *
-radix_tree<Key, Value, BytesView>::node::find_child(
-	radix_tree<Key, Value, BytesView>::tagged_node_ptr n) const
+template <bool Direction, typename Ptr>
+auto
+radix_tree<Key, Value, BytesView>::node::find_child(const Ptr &n) const
+	-> decltype(begin<Direction>())
 {
-	return &*std::find(begin<direction::Forward>(),
-			   end<direction::Forward>(), n);
-}
-
-template <typename Key, typename Value, typename BytesView>
-template <bool Direction>
-typename std::enable_if<
-	Direction ==
-		radix_tree<Key, Value, BytesView>::node::direction::Forward,
-	typename radix_tree<Key, Value,
-			    BytesView>::node::forward_iterator>::type
-radix_tree<Key, Value, BytesView>::node::make_iterator(
-	const tagged_node_ptr *child) const
-{
-	return forward_iterator(child, this);
-}
-
-template <typename Key, typename Value, typename BytesView>
-template <bool Direction>
-typename std::enable_if<
-	Direction ==
-		radix_tree<Key, Value, BytesView>::node::direction::Reverse,
-	typename radix_tree<Key, Value,
-			    BytesView>::node::reverse_iterator>::type
-radix_tree<Key, Value, BytesView>::node::make_iterator(
-	const tagged_node_ptr *child) const
-{
-	return reverse_iterator(++make_iterator<direction::Forward>(child));
+	return std::find(begin<Direction>(), end<Direction>(), n);
 }
 
 template <typename Key, typename Value, typename BytesView>
 template <bool IsConst>
 radix_tree<Key, Value, BytesView>::inline_string_reference<
-	IsConst>::inline_string_reference(node_ptr leaf_) noexcept
-    : leaf_(leaf_)
+	IsConst>::inline_string_reference(leaf_ptr leaf_, node_ptr root) noexcept
+    : leaf_(leaf_), root(root)
 {
 }
 
@@ -1961,7 +1940,7 @@ template <bool IsConst>
 radix_tree<Key, Value, BytesView>::inline_string_reference<
 	IsConst>::operator string_view() const noexcept
 {
-	return leaf_->get_leaf()->value();
+	return leaf_->value();
 }
 
 /*
@@ -1978,20 +1957,30 @@ radix_tree<Key, Value, BytesView>::inline_string_reference<IsConst>::operator=(
 	string_view rhs)
 {
 	auto occupied = sizeof(leaf) +
-		real_size<Key>::value(leaf_->get_leaf()->key()) +
-		real_size<Value>::value(leaf_->get_leaf()->value());
+		real_size<Key>::value(leaf_->key()) +
+		real_size<Value>::value(leaf_->value());
 	auto capacity =
-		pmemobj_alloc_usable_size(pmemobj_oid(leaf_->get_leaf())) -
+		pmemobj_alloc_usable_size(pmemobj_oid(leaf_)) -
 		occupied;
 
 	if (rhs.size() <= capacity) {
-		leaf_->get_leaf()->value().assign(rhs);
+		leaf_->value().assign(rhs);
 	} else {
-		auto pop = pool_base(pmemobj_pool_by_ptr(leaf_->get_leaf()));
-		auto old_leaf = leaf_->get_leaf();
+		tagged_node_ptr* slot;
+
+		if (!leaf_->parent) {
+			assert(root->get_leaf() == leaf_);
+			slot = root;
+		} else {
+			slot = const_cast<tagged_node_ptr*>(
+			&*leaf_->parent->find_child(leaf_));
+		}
+
+		auto pop = pool_base(pmemobj_pool_by_ptr(leaf_));
+		auto old_leaf = leaf_;
 
 		transaction::run(pop, [&] {
-			*leaf_ = leaf::make(old_leaf->parent, old_leaf->key(),
+			*slot = leaf::make(old_leaf->parent, old_leaf->key(),
 					    rhs);
 			delete_persistent<typename radix_tree::leaf>(old_leaf);
 		});
@@ -2003,8 +1992,8 @@ radix_tree<Key, Value, BytesView>::inline_string_reference<IsConst>::operator=(
 template <typename Key, typename Value, typename BytesView>
 template <bool IsConst>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<
-	IsConst>::radix_tree_iterator(node_ptr node, node_ptr root)
-    : node(node), root(root)
+	IsConst>::radix_tree_iterator(leaf_ptr leaf_, node_ptr root)
+    : leaf_(leaf_), root(root)
 {
 }
 
@@ -2013,7 +2002,7 @@ template <bool IsConst>
 template <bool C, typename Enable>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<
 	IsConst>::radix_tree_iterator(const radix_tree_iterator<false> &rhs)
-    : node(rhs.node)
+    : leaf_(rhs.leaf_)
 {
 }
 
@@ -2043,7 +2032,7 @@ typename radix_tree<Key, Value, BytesView>::template radix_tree_iterator<
 	IsConst>::key_reference
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::key() const
 {
-	return node->get_leaf()->key();
+	return leaf_->key();
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -2055,7 +2044,7 @@ typename std::enable_if<
 		template radix_tree_iterator<IsConst>::value_reference>::type
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::value() const
 {
-	return node->get_leaf()->value();
+	return leaf_->value();
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -2067,7 +2056,7 @@ typename std::enable_if<
 		template radix_tree_iterator<IsConst>::value_reference>::type
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::value() const
 {
-	return value_reference(node);
+	return value_reference(leaf_, root);
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -2076,15 +2065,15 @@ typename radix_tree<Key, Value,
 		    BytesView>::template radix_tree_iterator<IsConst>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator++()
 {
-	assert(node);
+	assert(leaf_);
 
-	/* node is root, there is no other leaf in the tree */
-	if (!node->get_leaf()->parent)
-		node = nullptr;
+	/* leaf is root, there is no other leaf in the tree */
+	if (!leaf_->parent)
+		leaf_ = nullptr;
 	else
-		node = const_cast<node_ptr>(
+		leaf_ = const_cast<leaf_ptr>(
 			next_leaf<radix_tree::node::direction::Forward>(
-				node, node->get_leaf()->parent));
+				leaf_, leaf_->parent));
 
 	return *this;
 }
@@ -2095,18 +2084,18 @@ typename radix_tree<Key, Value,
 		    BytesView>::template radix_tree_iterator<IsConst>
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator--()
 {
-	if (!node) {
+	if (!leaf_) {
 		/* this == end() */
-		node = const_cast<node_ptr>(
-			&radix_tree::find_leaf<
+		leaf_ = const_cast<leaf_ptr>(
+			radix_tree::find_leaf<
 				radix_tree::node::direction::Reverse>(*root));
-	} else if (!node->get_leaf()->parent) {
-		/* node is root, there is no other leaf in the tree */
-		node = nullptr;
+	} else if (!leaf_->parent) {
+		/* leaf is root, there is no other leaf in the tree */
+		leaf_ = nullptr;
 	} else {
-		node = const_cast<node_ptr>(
+		leaf_ = const_cast<leaf_ptr>(
 			next_leaf<radix_tree::node::direction::Reverse>(
-				node, node->get_leaf()->parent));
+				leaf_, leaf_->parent));
 	}
 
 	return *this;
@@ -2119,7 +2108,7 @@ bool
 radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator!=(
 	const radix_tree_iterator<C> &rhs) const
 {
-	return node != rhs.node;
+	return leaf_ != rhs.leaf_;
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -2138,12 +2127,12 @@ radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::operator==(
  * tree upwards.
  */
 template <typename Key, typename Value, typename BytesView>
-template <bool Direction>
-typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const *
-radix_tree<Key, Value, BytesView>::next_leaf(const tagged_node_ptr *child,
+template <bool Direction, typename Ptr>
+typename radix_tree<Key, Value, BytesView>::leaf *
+radix_tree<Key, Value, BytesView>::next_leaf(const Ptr &child,
 					     tagged_node_ptr parent)
 {
-	auto it = parent->template make_iterator<Direction>(child);
+	auto it = parent->template find_child<Direction>(child);
 
 	do {
 		++it;
@@ -2155,12 +2144,11 @@ radix_tree<Key, Value, BytesView>::next_leaf(const tagged_node_ptr *child,
 		if (!p) // parent == root
 			return nullptr;
 
-		auto child = p->find_child(parent);
-
-		return next_leaf<Direction>(child, p);
+		auto p_it = p->template find_child<Direction>(parent);
+		return next_leaf<Direction>(*p_it, p);
 	}
 
-	return &find_leaf<Direction>(*it);
+	return find_leaf<Direction>(*it);
 }
 
 /*
@@ -2169,14 +2157,14 @@ radix_tree<Key, Value, BytesView>::next_leaf(const tagged_node_ptr *child,
  */
 template <typename Key, typename Value, typename BytesView>
 template <bool Direction>
-typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const &
+typename radix_tree<Key, Value, BytesView>::leaf *
 radix_tree<Key, Value, BytesView>::find_leaf(
-	typename radix_tree<Key, Value, BytesView>::tagged_node_ptr const &n)
+	typename radix_tree<Key, Value, BytesView>::tagged_node_ptr n)
 {
 	assert(n);
 
 	if (n.is_leaf())
-		return n;
+		return n.get_leaf();
 
 	for (auto it = n->template begin<Direction>();
 	     it != n->template end<Direction>(); ++it) {
@@ -2216,6 +2204,24 @@ radix_tree<Key, Value, BytesView>::leaf::value()
 						 real_size<Key>::value(key()));
 
 	return *reinterpret_cast<Value *>(val_dst);
+}
+
+template <typename Key, typename Value, typename BytesView>
+const Key &
+radix_tree<Key, Value, BytesView>::leaf::key() const
+{
+	return *reinterpret_cast<const Key *>(this + 1);
+}
+
+template <typename Key, typename Value, typename BytesView>
+const Value &
+radix_tree<Key, Value, BytesView>::leaf::value() const
+{
+	auto key_dst = reinterpret_cast<const char *>(this + 1);
+	auto val_dst = reinterpret_cast<const Value *>(key_dst +
+						 real_size<Key>::value(key()));
+
+	return *reinterpret_cast<const Value *>(val_dst);
 }
 
 template <typename Key, typename Value, typename BytesView>
