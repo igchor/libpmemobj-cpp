@@ -45,5 +45,5 @@ if (TEST_CONCURRENT_HASHMAP)
 endif()
 
 if (TEST_RADIX_TREE)
-	add_benchmark(radix_tree_iteration radix_tree/iteration.cpp)
+	add_benchmark(radix_tree_try_emplace radix_tree/try_emplace.cpp)
 endif()

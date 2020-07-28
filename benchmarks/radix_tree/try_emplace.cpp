@@ -51,40 +51,15 @@ insert(pmem::obj::pool<root> &pop, size_t n_inserts)
 
 	assert(map != nullptr);
 
-	for (size_t i = 0; i < n_inserts; i++) {
-		auto ret = map->try_emplace(i, i);
-		assert(ret.second);
-	}
+	pmem::obj::transaction::run(pop, [&] {
+		for (size_t i = 0; i < n_inserts; i++) {
+			auto ret = map->try_emplace(i, i);
+			(void)ret;
+			assert(ret.second);
+		}
+	});
 
 	assert(map->size() == n_inserts);
-}
-
-void
-iterate_forward(pmem::obj::pool<root> &pop)
-{
-	auto map = pop.root()->pptr;
-
-	size_t i = 0;
-	for (auto it = map->cbegin(); it != map->cend(); ++it) {
-		if ((*it).second != i)
-			abort();
-
-		i++;
-	}
-}
-
-void
-iterate_backward(pmem::obj::pool<root> &pop)
-{
-	auto map = pop.root()->pptr;
-
-	size_t i = map->size() - 1;
-	for (auto it = map->crbegin(); it != map->crend(); ++it) {
-		if ((*it).second != i)
-			abort();
-
-		i--;
-	}
 }
 
 int
@@ -92,8 +67,7 @@ main(int argc, char *argv[])
 {
 	pmem::obj::pool<root> pop;
 	try {
-		std::string usage =
-			"usage: %s file-name <create n_inserts | iterate <forward | backward>>";
+		std::string usage = "usage: %s file-name <create n_inserts>";
 
 		if (argc < 4) {
 			std::cerr << usage << std::endl;
@@ -113,9 +87,7 @@ main(int argc, char *argv[])
 			size_t n_inserts = std::stoull(argv[3]);
 
 			try {
-				auto pool_size =
-					n_inserts * sizeof(size_t) * 10 +
-					20 * PMEMOBJ_MIN_POOL;
+				auto pool_size = 1000 * PMEMOBJ_MIN_POOL;
 
 				pop = pmem::obj::pool<root>::create(
 					path, LAYOUT, pool_size,
@@ -126,34 +98,17 @@ main(int argc, char *argv[])
 							persistent_map_type>();
 				});
 
-				insert(pop, n_inserts);
+				std::cout << measure<std::chrono::milliseconds>(
+						     [&] {
+							     insert(pop,
+								    n_inserts);
+						     })
+					  << "ms" << std::endl;
 			} catch (pmem::pool_error &pe) {
 				std::cerr << "!pool::create: " << pe.what()
 					  << std::endl;
 				return 1;
 			}
-		} else if (std::string(argv[3]) == "forward") {
-			try {
-				pop = pmem::obj::pool<root>::open(path, LAYOUT);
-			} catch (pmem::pool_error &pe) {
-				std::cerr << "!pool::open: " << pe.what()
-					  << std::endl;
-				return 1;
-			}
-			std::cout << measure<std::chrono::milliseconds>([&] {
-				iterate_forward(pop);
-			}) << "ms" << std::endl;
-		} else if (std::string(argv[3]) == "backward") {
-			try {
-				pop = pmem::obj::pool<root>::open(path, LAYOUT);
-			} catch (pmem::pool_error &pe) {
-				std::cerr << "!pool::open: " << pe.what()
-					  << std::endl;
-				return 1;
-			}
-			std::cout << measure<std::chrono::milliseconds>([&] {
-				iterate_backward(pop);
-			}) << "ms" << std::endl;
 		} else {
 			throw std::runtime_error("Wrong argv.");
 		}
