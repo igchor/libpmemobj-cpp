@@ -243,9 +243,15 @@ private:
 	struct node;
 	struct leaf;
 
+	template <typename T>
+	using persistency_type = p<T>;
+	using transaction_type = transaction;
+	using node_allocator = allocator<node>;
+	using leaf_allocator = allocator<leaf>;
+
 	/*** pmem members ***/
 	tagged_node_ptr root;
-	p<uint64_t> size_;
+	persistency_type<uint64_t> size_;
 
 	/* helper functions */
 	template <typename F, class... Args>
@@ -314,7 +320,7 @@ private:
 
 	uint64_t get() const noexcept;
 
-	p<uint64_t> off;
+	persistency_type<uint64_t> off;
 };
 
 /**
@@ -824,10 +830,9 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 						    F &&make_leaf)
 {
 	auto key = bytes_view(k);
-	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
 	if (!root) {
-		transaction::run(pop, [&] { this->root = make_leaf(nullptr); });
+		this->root = make_leaf(nullptr);
 		return {iterator(root.get_leaf(), &root), true};
 	}
 
@@ -871,7 +876,7 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	if (!n) {
 		assert(diff < min_key_len);
 
-		transaction::run(pop, [&] { *child_slot = make_leaf(prev); });
+		*child_slot = make_leaf(prev);
 		return {iterator(child_slot->get_leaf(), &root), true};
 	}
 
@@ -890,28 +895,27 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 						 &root),
 					false};
 
-			transaction::run(
-				pop, [&] { n->embedded_entry = make_leaf(n); });
+			n->embedded_entry = make_leaf(n);
 
 			return {iterator(n->embedded_entry.get_leaf(), &root),
 				true};
 		}
 
+		node_allocator a;
+
 		/* Path length from root to n is longer than key.size().
 		 * We have to allocate new internal node above n. */
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			node = make_persistent<radix_tree::node>();
-			node->embedded_entry = make_leaf(node);
-			node->child[slice_index(leaf_key[diff], FIRST_NIB)] = n;
-			node->parent = parent_ref(n);
-			node->byte = diff;
-			node->bit = FIRST_NIB;
+		auto node = a.allocate(1);
+		a.construct(node);
+		node->embedded_entry = make_leaf(node);
+		node->child[slice_index(leaf_key[diff], FIRST_NIB)] = n;
+		node->parent = parent_ref(n);
+		node->byte = diff;
+		node->bit = FIRST_NIB;
 
-			parent_ref(n) = node;
+		parent_ref(n) = node;
 
-			*child_slot = node;
-		});
+		*child_slot = node;
 
 		return {iterator(node->embedded_entry.get_leaf(), &root), true};
 	}
@@ -919,22 +923,21 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	if (diff == leaf_key.size()) {
 		/* Leaf key is a prefix of the new key. We need to convert leaf
 		 * to a node. */
-		tagged_node_ptr node;
-		transaction::run(pop, [&] {
-			/* We have to add new node at the edge from parent to n
-			 */
-			node = make_persistent<radix_tree::node>();
-			node->embedded_entry = n;
-			node->child[slice_index(key[diff], FIRST_NIB)] =
-				make_leaf(node);
-			node->parent = parent_ref(n);
-			node->byte = diff;
-			node->bit = FIRST_NIB;
+		node_allocator a;
+		/* We have to add new node at the edge from parent to n
+		 */
+		auto node = a.allocate(1);
+		a.construct(node);
+		node->embedded_entry = n;
+		node->child[slice_index(key[diff], FIRST_NIB)] =
+			make_leaf(node);
+		node->parent = parent_ref(n);
+		node->byte = diff;
+		node->bit = FIRST_NIB;
 
-			parent_ref(n) = node;
+		parent_ref(n) = node;
 
-			*child_slot = node;
-		});
+		*child_slot = node;
 
 		return {iterator(node->child[slice_index(key[diff], FIRST_NIB)]
 					 .get_leaf(),
@@ -946,19 +949,19 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const_key_reference k,
 	 * (slice_index(key[diff], sh)). This means that a tree is vertically
 	 * compressed and we have to "break" this compression and add a new
 	 * node. */
-	tagged_node_ptr node;
-	transaction::run(pop, [&] {
-		node = make_persistent<radix_tree::node>();
-		node->child[slice_index(leaf_key[diff], sh)] = n;
-		node->child[slice_index(key[diff], sh)] = make_leaf(node);
-		node->parent = parent_ref(n);
-		node->byte = diff;
-		node->bit = sh;
+	node_allocator a;
 
-		parent_ref(n) = node;
+	auto node = a.allocate(1);
+	a.construct(node);
+	node->child[slice_index(leaf_key[diff], sh)] = n;
+	node->child[slice_index(key[diff], sh)] = make_leaf(node);
+	node->parent = parent_ref(n);
+	node->byte = diff;
+	node->bit = sh;
 
-		*child_slot = node;
-	});
+	parent_ref(n) = node;
+
+	*child_slot = node;
 
 	return {iterator(node->child[slice_index(key[diff], sh)].get_leaf(),
 			 &root),
@@ -993,10 +996,18 @@ std::pair<typename radix_tree<Key, Value, BytesView>::iterator, bool>
 radix_tree<Key, Value, BytesView>::try_emplace(const_key_reference k,
 					       Args &&... args)
 {
-	return internal_emplace(k, [&](tagged_node_ptr parent) {
-		size_++;
-		return leaf::make(parent, k, std::forward<Args>(args)...);
+	std::pair<iterator, bool> ret;
+	auto pop = pool_base(pmemobj_pool_by_ptr(this));
+
+	transaction_type::run(pop, [&] {
+		ret = internal_emplace(k, [&](tagged_node_ptr parent) {
+			++size_;
+			return leaf::make(parent, k,
+					  std::forward<Args>(args)...);
+		});
 	});
+
+	return ret;
 }
 
 /**
@@ -1034,18 +1045,21 @@ radix_tree<Key, Value, BytesView>::emplace(Args &&... args)
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 	std::pair<iterator, bool> ret;
 
-	transaction::run(pop, [&] {
+	transaction_type::run(pop, [&] {
 		auto leaf_ = leaf::make(nullptr, std::forward<Args>(args)...);
 		auto make_leaf = [&](tagged_node_ptr parent) {
 			leaf_->parent = parent;
-			size_++;
+			++size_;
 			return leaf_;
 		};
 
 		ret = internal_emplace(leaf_->key(), make_leaf);
 
-		if (!ret.second)
-			delete_persistent<leaf>(leaf_);
+		if (!ret.second) {
+			leaf_allocator a;
+			a.destroy(leaf_);
+			a.deallocate(leaf_);
+		}
 	});
 
 	return ret;
@@ -1159,14 +1173,15 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 {
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
-	transaction::run(pop, [&] {
+	transaction_type::run(pop, [&] {
 		auto *leaf = pos.leaf_;
 		auto parent = leaf->parent;
 
-		delete_persistent<radix_tree::leaf>(
-			persistent_ptr<radix_tree::leaf>(leaf));
+		leaf_allocator a;
+		a.destroy(persistent_ptr<radix_tree::leaf>(leaf));
+		a.deallocate(persistent_ptr<radix_tree::leaf>(leaf));
 
-		size_--;
+		--size_;
 
 		/* was root */
 		if (!parent) {
@@ -1209,7 +1224,9 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator pos)
 			: &root;
 		*child_slot = only_child;
 
-		delete_persistent<radix_tree::node>(n.get_node());
+		node_allocator na;
+		na.destroy(n.get_node());
+		na.deallocate(n.get_node());
 	});
 
 	return iterator(const_cast<typename iterator::leaf_ptr>(pos.leaf_),
@@ -1236,7 +1253,7 @@ radix_tree<Key, Value, BytesView>::erase(const_iterator first,
 {
 	auto pop = pool_base(pmemobj_pool_by_ptr(this));
 
-	transaction::run(pop, [&] {
+	transaction_type::run(pop, [&] {
 		while (first != last)
 			first = erase(first);
 	});
@@ -1619,14 +1636,13 @@ radix_tree<Key, Value, BytesView>::slice_index(char b, uint8_t bit)
 template <typename Key, typename Value, typename BytesView>
 radix_tree<Key, Value, BytesView>::tagged_node_ptr::tagged_node_ptr(
 	std::nullptr_t)
+    : off(0)
 {
-	this->off = 0;
 }
 
 template <typename Key, typename Value, typename BytesView>
-radix_tree<Key, Value, BytesView>::tagged_node_ptr::tagged_node_ptr()
+radix_tree<Key, Value, BytesView>::tagged_node_ptr::tagged_node_ptr() : off(0)
 {
-	this->off = 0;
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -1986,10 +2002,13 @@ radix_tree<Key, Value, BytesView>::inline_string_reference<IsConst>::operator=(
 		auto pop = pool_base(pmemobj_pool_by_ptr(leaf_));
 		auto old_leaf = leaf_;
 
-		transaction::run(pop, [&] {
+		transaction_type::run(pop, [&] {
 			*slot = leaf::make(old_leaf->parent, old_leaf->key(),
 					   rhs);
-			delete_persistent<typename radix_tree::leaf>(old_leaf);
+
+			leaf_allocator a;
+			a.destroy(old_leaf);
+			a.deallocate(old_leaf);
 		});
 	}
 
@@ -2308,7 +2327,7 @@ radix_tree<Key, Value, BytesView>::leaf::make_internal(
 	std::tuple<Args2...> &second_args, detail::index_sequence<I1...>,
 	detail::index_sequence<I2...>)
 {
-	standard_alloc_policy<void> a;
+	typename leaf_allocator::template rebind<void>::other a;
 	auto key_size = real_size<Key>::value(std::get<I1>(first_args)...);
 	auto val_size = real_size<Value>::value(std::get<I2>(second_args)...);
 	auto ptr = static_cast<persistent_ptr<leaf>>(
