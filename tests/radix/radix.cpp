@@ -324,34 +324,22 @@ test(int argc, char *argv[])
 	}
 
 	test_emplace(pop, pop.root()->radix_str);
-	test_assign<container_string, 1>(pop, pop.root()->radix_str);
 	test_assign<container_string, 1024>(pop, pop.root()->radix_str);
-	test_assign_root<container_string, 1>(pop, pop.root()->radix_str);
 	test_assign_root<container_string, 1024>(pop, pop.root()->radix_str);
 	test_erase<container_string, 1024>(pop, pop.root()->radix_str);
-	test_assign_internal_leaf<container_string, 1>(pop,
-						       pop.root()->radix_str);
 	test_assign_internal_leaf<container_string, 1024>(
 		pop, pop.root()->radix_str);
 	test_erase_internal<container_string, 1024>(pop, pop.root()->radix_str);
 
 	test_emplace(pop, pop.root()->radix_int);
-	test_assign<container_int, 1>(pop, pop.root()->radix_int);
-	test_assign_root<container_int, 1>(pop, pop.root()->radix_int);
 	test_erase<container_int, 1024>(pop, pop.root()->radix_int);
-	test_assign_internal_leaf<container_int, 1>(pop, pop.root()->radix_int);
 	test_erase_internal<container_int, 1024>(pop, pop.root()->radix_int);
 
 	test_emplace(pop, pop.root()->radix_int_int);
-	test_assign<container_int_int, 1>(pop, pop.root()->radix_int_int);
-	test_assign_root<container_int_int, 1>(pop, pop.root()->radix_int_int);
 	test_erase<container_int_int, 1>(pop, pop.root()->radix_int_int);
 
 	test_emplace(pop, pop.root()->radix_int_str);
-	test_assign<container_int_string, 1>(pop, pop.root()->radix_int_str);
 	test_assign<container_int_string, 1024>(pop, pop.root()->radix_int_str);
-	test_assign_root<container_int_string, 1>(pop,
-						  pop.root()->radix_int_str);
 	test_assign_root<container_int_string, 1024>(pop,
 						     pop.root()->radix_int_str);
 	test_erase<container_int_string, 1024>(pop, pop.root()->radix_int_str);

@@ -9,14 +9,16 @@
 #include <libpmemobj++/pool.hpp>
 #include <libpmemobj++/transaction.hpp>
 
+#include <libpmemobj++/experimental/actions.hpp>
+
 void
 assert_tx_abort(pmem::obj::pool<struct root> &pop, std::function<void(void)> f)
 {
 	bool exception_thrown = false;
 	try {
-		pmem::obj::transaction::run(pop, [&] {
+		pmem::obj::experimental::actions_tx::run(pop, [&] {
 			f();
-			pmem::obj::transaction::abort(EINVAL);
+			throw pmem::manual_tx_abort("");
 		});
 	} catch (pmem::manual_tx_abort &) {
 		exception_thrown = true;
