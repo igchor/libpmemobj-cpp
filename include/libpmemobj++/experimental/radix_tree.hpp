@@ -31,6 +31,8 @@
 #include <libpmemobj++/detail/common.hpp>
 #include <libpmemobj++/detail/integer_sequence.hpp>
 
+#include <libpmemobj++/experimental/actions.hpp>
+
 namespace pmem
 {
 
@@ -244,10 +246,10 @@ private:
 	struct leaf;
 
 	template <typename T>
-	using persistency_type = p<T>;
-	using transaction_type = transaction;
-	using node_allocator = allocator<node>;
-	using leaf_allocator = allocator<leaf>;
+	using persistency_type = r<T>;
+	using transaction_type = actions_tx;
+	using node_allocator = actions_allocator<node>;
+	using leaf_allocator = actions_allocator<leaf>;
 
 	/*** pmem members ***/
 	tagged_node_ptr root;
