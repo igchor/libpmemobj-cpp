@@ -18,6 +18,40 @@
 #include <unordered_map>
 #include <vector>
 
+struct pmemobjpool {
+	char padd[4096];
+	//struct pool_hdr hdr;	/* memory pool header */
+
+	/* persistent part of PMEMOBJ pool descriptor (2kB) */
+	char layout[((size_t)1024)];
+	uint64_t lanes_offset;
+	uint64_t nlanes;
+	uint64_t heap_offset;
+	uint64_t unused3;
+	unsigned char unused[2048 - 40 - 1024]; /* must be zero */
+	uint64_t checksum;	/* checksum of above fields */
+
+	uint64_t root_offset;
+
+	/* unique runID for this program run - persistent but not checksummed */
+	uint64_t run_id;
+
+	uint64_t root_size;
+
+	/*
+	 * These flags can be set from a conversion tool and are set only for
+	 * the first recovery of the pool.
+	 */
+	uint64_t conversion_flags;
+
+	uint64_t heap_size;
+};
+
+#define PTR_FROM_POOL(pop, ptr)\
+	((uintptr_t)(ptr) >= (uintptr_t)(pop) &&\
+	(uintptr_t)(ptr) < (uintptr_t)(pop) +\
+	(pop)->heap_offset + (pop)->heap_size)
+
 namespace pmem
 {
 
@@ -41,7 +75,7 @@ struct actions {
 	void
 	set(T *w, T value)
 	{
-		if (!pmemobj_pool_by_ptr(w)) {
+		if (!PTR_FROM_POOL(((pmemobjpool*) pop), w)) {
 			*w = value;
 			return;
 		}
@@ -89,9 +123,6 @@ struct actions {
 
 		acts.reserve(acts.size() + wal.size());
 		for (auto &v : wal) {
-			if (!pmemobj_pool_by_ptr(v.first))
-				continue;
-
 			acts.emplace_back();
 			pmemobj_set_value(pop, &acts.back(), v.first, v.second);
 		}
