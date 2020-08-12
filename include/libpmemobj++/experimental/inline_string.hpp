@@ -55,7 +55,7 @@ public:
 	 *
 	 * @throw pool_error if inline_string doesn't reside on pmem.
 	 */
-	inline_string(string_view v) : size_(v.size())
+	inline_string(string_view v) : size_(v.size()), capacity_(v.size())
 	{
 		if (nullptr == pmemobj_pool_by_ptr(this))
 			throw pmem::pool_error("Invalid pool handle.");
@@ -71,7 +71,8 @@ public:
 	 *
 	 * @throw pool_error if inline_string doesn't reside on pmem.
 	 */
-	inline_string(const inline_string &rhs) : size_(rhs.size())
+	inline_string(const inline_string &rhs)
+	    : size_(rhs.size()), capacity_(rhs.size())
 	{
 		if (nullptr == pmemobj_pool_by_ptr(this))
 			throw pmem::pool_error("Invalid pool handle.");
@@ -105,6 +106,12 @@ public:
 	size() const noexcept
 	{
 		return size_;
+	}
+
+	size_type
+	capacity() const noexcept
+	{
+		return capacity_;
 	}
 
 	/** @return pointer to the data (equal to (this + 1)) */
@@ -158,6 +165,7 @@ public:
 
 private:
 	obj::p<uint64_t> size_;
+	obj::p<uint64_t> capacity_;
 };
 
 /**

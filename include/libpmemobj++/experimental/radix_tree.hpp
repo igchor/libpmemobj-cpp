@@ -2031,9 +2031,7 @@ typename radix_tree<Key, Value,
 radix_tree<Key, Value, BytesView>::inline_string_reference<IsConst>::operator=(
 	string_view rhs)
 {
-	auto occupied = sizeof(leaf) + real_size<Key>::value(leaf_->key());
-	auto capacity =
-		pmemobj_alloc_usable_size(pmemobj_oid(leaf_)) - occupied;
+	auto capacity = leaf_->value().capacity() + 16 + 1;
 
 	if (real_size<Value>::value(rhs) <= capacity) {
 		leaf_->value().assign(rhs);
