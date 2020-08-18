@@ -138,6 +138,7 @@ test(int argc, char *argv[])
 	test_ptr_array(pop);
 	test_offset(pop);
 	test_base_ptr_casting(pop);
+	test_ptr_assignment(pop);
 
 	pop.close();
 }

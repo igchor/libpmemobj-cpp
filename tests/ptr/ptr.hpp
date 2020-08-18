@@ -306,3 +306,17 @@ test_ptr_transactional(nvobj::pool<templated_root<pointer, pointer_base>> &pop)
 	UT_ASSERT(r->pfoo == nullptr);
 	UT_ASSERT(pfoo != nullptr);
 }
+
+template <template <typename U> class pointer, class pointer_base>
+void test_ptr_assignment(nvobj::pool<templated_root<pointer, pointer_base>> &pop)
+{
+	int tmp;
+
+	pointer_base ptr1 = &tmp;
+	pointer_base ptr2 = nullptr;
+
+	ptr1 = ptr2;
+
+	UT_ASSERT(ptr1.to_void_pointer() == nullptr);
+	UT_ASSERT(ptr2.to_void_pointer() == nullptr);
+}
