@@ -207,7 +207,8 @@ if(CHECK_CPP_STYLE)
 endif()
 
 if(DEVELOPER_MODE)
-	add_flag(-Werror) # XXX: WX for windows
+	add_flag(-Werror)
+	add_flag(-WX)
 	execute_process(COMMAND ${PERL_EXECUTABLE} -MText::Diff -e ""
 			ERROR_QUIET
 			RESULT_VARIABLE PERL_TEXT_DIFF_STATUS)
