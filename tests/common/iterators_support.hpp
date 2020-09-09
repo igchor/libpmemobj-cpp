@@ -537,7 +537,7 @@ public:
 	counting_it &
 	operator+=(difference_type n)
 	{
-		m_inc += static_cast<size_t>(n);
+		m_inc += static_cast<Incrementable>(n);
 		return *this;
 	}
 

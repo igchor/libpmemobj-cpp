@@ -64,10 +64,10 @@ test(nvobj::pool<struct root> &pop)
 	check_vector(pop, 10, 1);
 
 	/* assign() - range version */
-	auto begin = test_support::counting_it<size_t>(0);
+	auto begin = test_support::counting_it<int>(0);
 	/* we won't try to dereference this, it will be used for std::distance()
 	 * calculation only */
-	auto end = test_support::counting_it<size_t>(size);
+	auto end = test_support::counting_it<int>(size);
 
 	exception_thrown = false;
 
