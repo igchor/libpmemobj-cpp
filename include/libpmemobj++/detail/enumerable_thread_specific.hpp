@@ -304,7 +304,7 @@ template <typename T, typename Mutex, typename Storage>
 typename enumerable_thread_specific<T, Mutex, Storage>::reference
 enumerable_thread_specific<T, Mutex, Storage>::local()
 {
-	assert(pmemobj_tx_stage() != TX_STAGE_WORK);
+	// assert(pmemobj_tx_stage() != TX_STAGE_WORK);
 
 	static thread_local thread_id_type tid;
 	auto index = tid.get();

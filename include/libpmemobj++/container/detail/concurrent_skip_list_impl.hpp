@@ -2502,7 +2502,7 @@ private:
 	std::pair<iterator, bool>
 	internal_emplace(Args &&... args)
 	{
-		check_outside_tx();
+		// check_outside_tx();
 		tls_entry_type &tls_entry = tls_data.local();
 		obj::pool_base pop = get_pool_base();
 
@@ -2593,7 +2593,7 @@ private:
 	std::pair<iterator, bool>
 	internal_insert(const K &key, Args &&... args)
 	{
-		check_outside_tx();
+		// check_outside_tx();
 		tls_entry_type &tls_entry = tls_data.local();
 		assert(tls_entry.ptr == nullptr);
 
