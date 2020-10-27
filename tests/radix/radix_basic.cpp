@@ -584,6 +584,11 @@ test_erase(nvobj::pool<root> &pop)
 	UT_ASSERT(r->radix_str->size() == 0);
 
 	nvobj::transaction::run(pop, [&] {
+		typename container_string::node_handle x = container_string::node_type::make(nullptr, "abc", "abc");
+		r->radix_str->insert(std::move(x));
+	});
+
+	nvobj::transaction::run(pop, [&] {
 		nvobj::delete_persistent<container_string>(r->radix_str);
 	});
 

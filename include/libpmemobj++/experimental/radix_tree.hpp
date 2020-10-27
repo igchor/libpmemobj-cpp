@@ -106,6 +106,8 @@ class radix_tree {
 	template <bool IsConst>
 	struct radix_tree_iterator;
 
+	struct leaf;
+
 public:
 	using key_type = Key;
 	using mapped_type = Value;
@@ -118,6 +120,9 @@ public:
 	using reverse_iterator = std::reverse_iterator<iterator>;
 	using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 	using difference_type = std::ptrdiff_t;
+
+	using node_type = leaf;
+	using node_handle = self_relative_ptr<leaf>;
 
 	radix_tree();
 
@@ -138,6 +143,16 @@ public:
 
 	std::pair<iterator, bool> insert(const value_type &v);
 	std::pair<iterator, bool> insert(value_type &&v);
+
+	std::pair<iterator, bool> insert(node_handle &&v) {
+		return internal_emplace(v->key(), [&](tagged_node_ptr parent) {
+			size_++;
+			v->parent = parent;
+			return v;
+		});
+	}
+
+
 	template <typename P,
 		  typename = typename std::enable_if<
 			  std::is_constructible<value_type, P &&>::value,
