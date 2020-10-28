@@ -74,6 +74,24 @@ check_tx_abort(pmem::obj::pool<struct root> &pop, const char *str,
 {
 	auto r = pop.root();
 
+	std::vector<pobj_action> acts;
+	acts.emplace_back();
+
+	pmem::obj::persistent_ptr<S> mem = pmemobj_reserve(pop.handle(), &acts.back(), sizeof(S), 0);
+
+	std::string test_str(40, 'x');
+
+	new (mem.get()) S(acts, test_str.data(), 40);
+
+	if(pmemobj_publish(pop.handle(), acts.data(), acts.size()))
+		throw std::runtime_error("PUBLISH");
+
+	UT_ASSERT(memcmp(mem->data(), test_str.data(), test_str.size()) == 0);
+
+	nvobj::transaction::run(pop, [&] {
+		nvobj::delete_persistent<S>(mem);
+	});
+
 	try {
 		nvobj::transaction::run(pop, [&] {
 			r->s = nvobj::make_persistent<S>(str);

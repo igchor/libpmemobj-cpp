@@ -27,6 +27,8 @@
 #include <libpmemobj++/transaction.hpp>
 #include <libpmemobj++/utils.hpp>
 
+#include <libpmemobj/action_base.h>
+
 namespace pmem
 {
 
@@ -67,6 +69,7 @@ public:
 	static constexpr size_type sso_capacity = (32 - 8) / sizeof(CharT) - 1;
 
 	/* Constructors */
+	basic_string(std::vector<pobj_action> &acts, const CharT* data, size_t size);
 	basic_string();
 	basic_string(size_type count, CharT ch);
 	basic_string(const basic_string &other, size_type pos,
@@ -436,6 +439,29 @@ basic_string<CharT, Traits>::basic_string()
 
 	allocate(0);
 	initialize(0U, value_type('\0'));
+}
+
+/* EXPERIMENTAL API */
+template <typename CharT, typename Traits>
+basic_string<CharT, Traits>::basic_string(std::vector<pobj_action> &acts, const CharT* data, size_t size)
+{
+	pool_base pb = get_pool();
+
+	sso._size = 0;
+
+	if (size <= sso_capacity)
+		throw std::runtime_error("NOT SUPPORTED YET");
+
+	disable_sso();
+	detail::create<non_sso_type>(&non_sso_data());
+
+	non_sso_data().reserve_intent(acts, pb, size + 1);
+	non_sso_data().assign_non_atomic(pb, data, size);
+	non_sso_data().data()[size] = value_type('\0');
+
+	pmemobj_flush(pb.handle(), &non_sso_data().data()[size], sizeof(value_type));
+	pmemobj_flush(pb.handle(), this, sizeof(*this));
+	pmemobj_drain(pb.handle());
 }
 
 /**

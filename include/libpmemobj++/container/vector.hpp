@@ -20,6 +20,7 @@
 #include <libpmemobj++/slice.hpp>
 #include <libpmemobj++/transaction.hpp>
 #include <libpmemobj++/utils.hpp>
+#include <libpmemobj/action_base.h>
 #include <libpmemobj/base.h>
 
 #include <algorithm>
@@ -60,6 +61,11 @@ public:
 
 	/* Constructors */
 	vector();
+
+	void reserve_intent(std::vector<pobj_action> &acts, pool_base pop, size_type capacity_new);
+	template <typename Value = T, typename Enable = typename std::enable_if<std::is_trivial<Value>::value>::type>
+	void assign_non_atomic(pool_base pop, const T* data, size_t size);
+
 	vector(size_type count, const value_type &value);
 	explicit vector(size_type count);
 	template <typename InputIt,
@@ -319,8 +325,8 @@ bool operator>=(const std::vector<T> &lhs, const vector<T> &rhs);
 template <typename T>
 vector<T>::vector()
 {
-	check_pmem();
-	check_tx_stage_work();
+	// check_pmem();
+	// check_tx_stage_work();
 
 	_data = nullptr;
 	_size = 0;
@@ -531,6 +537,36 @@ vector<T>::vector(const std::vector<T> &other)
     : vector(other.cbegin(), other.cend())
 {
 }
+
+template <typename T>
+void
+vector<T>::reserve_intent(std::vector<pobj_action> &acts, pool_base pop, size_type capacity_new)
+{
+	if (capacity_new <= _capacity)
+		return;
+	
+	if (capacity() != 0)
+		throw std::runtime_error("NOT_SUPPRTED YET");
+
+	acts.emplace_back();
+	_data = pmemobj_reserve(pop.handle(), &acts.back(), capacity_new * sizeof(value_type), 0);
+
+	_capacity = capacity_new;
+}
+
+template <typename T>
+template <typename Value, typename Enable>
+void
+vector<T>::assign_non_atomic(pool_base pop, const T* data,  size_t size)
+{
+	if (capacity() < size)
+		throw std::runtime_error("NOT_SUPPRTED YET");
+
+	pmemobj_memcpy(pop.handle(), _data.get(), data, size, PMEMOBJ_F_MEM_NODRAIN);
+
+	_size = size;
+}
+
 
 /**
  * Copy assignment operator. Replaces the contents with a copy of the contents
