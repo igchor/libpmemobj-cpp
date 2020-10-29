@@ -61,10 +61,10 @@ public:
 
 	/* Constructors */
 	vector();
+	vector(std::vector<pobj_action> &acts, pool_base pop, size_t capacity);
 
-	void reserve_intent(std::vector<pobj_action> &acts, pool_base pop, size_type capacity_new);
 	template <typename Value = T, typename Enable = typename std::enable_if<std::is_trivial<Value>::value>::type>
-	void assign_non_atomic(pool_base pop, const T* data, size_t size);
+	void assign_non_atomic(std::vector<pobj_action> &acts, pool_base pop, const T* data, size_t size);
 
 	vector(size_type count, const value_type &value);
 	explicit vector(size_type count);
@@ -114,6 +114,8 @@ public:
 	value_type *data();
 	const value_type *data() const noexcept;
 	const value_type *cdata() const noexcept;
+
+	void push_back_intent(std::vector<pobj_action> &acts, pool_base p, const value_type& v);
 
 	/* Iterators */
 	iterator begin();
@@ -539,34 +541,40 @@ vector<T>::vector(const std::vector<T> &other)
 }
 
 template <typename T>
-void
-vector<T>::reserve_intent(std::vector<pobj_action> &acts, pool_base pop, size_type capacity_new)
+vector<T>::vector(std::vector<pobj_action> &acts, pool_base pop, size_t capacity)
 {
-	if (capacity_new <= _capacity)
-		return;
-	
-	if (capacity() != 0)
-		throw std::runtime_error("NOT_SUPPRTED YET");
+	// check_pmem();
+	// check_tx_stage_work();
 
 	acts.emplace_back();
-	_data = pmemobj_reserve(pop.handle(), &acts.back(), capacity_new * sizeof(value_type), 0);
+	_data = pmemobj_reserve(pop.handle(), &acts.back(), capacity * sizeof(value_type), 0);
 
-	_capacity = capacity_new;
+	_size = 0;
+	_capacity = capacity;
 }
 
 template <typename T>
 template <typename Value, typename Enable>
 void
-vector<T>::assign_non_atomic(pool_base pop, const T* data,  size_t size)
+vector<T>::assign_non_atomic(std::vector<pobj_action> &acts, pool_base pop, const T* data,  size_t size)
 {
-	if (capacity() < size)
-		throw std::runtime_error("NOT_SUPPRTED YET");
+	pmemobj_memcpy(pop.handle(), _data.get(), data, size * sizeof(value_type), PMEMOBJ_F_MEM_NODRAIN);
 
-	pmemobj_memcpy(pop.handle(), _data.get(), data, size, PMEMOBJ_F_MEM_NODRAIN);
-
+	//acts.emplace_back();
 	_size = size;
+	//pmemobj_set_value(pop.handle(), &acts.back(), (uint64_t*) &_size, size);
 }
+template <typename T>
+void vector<T>::push_back_intent(std::vector<pobj_action> &acts,  pool_base pop, const value_type& v)
+{
+	if (capacity() == size())
+		throw std::runtime_error("NOT SUPPORTED");
 
+	_data.get()[_size] = v;
+	pmemobj_flush(pop.handle(), &_data.get()[_size], sizeof(v));
+
+	_size++;
+}
 
 /**
  * Copy assignment operator. Replaces the contents with a copy of the contents

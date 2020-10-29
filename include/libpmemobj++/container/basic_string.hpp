@@ -69,7 +69,7 @@ public:
 	static constexpr size_type sso_capacity = (32 - 8) / sizeof(CharT) - 1;
 
 	/* Constructors */
-	basic_string(std::vector<pobj_action> &acts, const CharT* data, size_t size);
+	basic_string(pool_base pb, std::vector<pobj_action> &acts, const CharT* data, size_t size);
 	basic_string();
 	basic_string(size_type count, CharT ch);
 	basic_string(const basic_string &other, size_type pos,
@@ -188,6 +188,7 @@ public:
 	void shrink_to_fit();
 	void clear();
 	void free_data();
+	void free_data(pool_base);
 
 	/* Modifiers */
 	basic_string &erase(size_type index = 0, size_type count = npos);
@@ -443,26 +444,20 @@ basic_string<CharT, Traits>::basic_string()
 
 /* EXPERIMENTAL API */
 template <typename CharT, typename Traits>
-basic_string<CharT, Traits>::basic_string(std::vector<pobj_action> &acts, const CharT* data, size_t size)
+basic_string<CharT, Traits>::basic_string(pool_base pb, std::vector<pobj_action> &acts, const CharT* data, size_t size)
 {
-	pool_base pb = get_pool();
-
-	sso._size = 0;
-
 	if (size <= sso_capacity)
 		throw std::runtime_error("NOT SUPPORTED YET");
 
 	disable_sso();
-	detail::create<non_sso_type>(&non_sso_data());
+	detail::create<non_sso_type>(&non_sso_data(), acts, pb, size + 1);
+	non_sso_data().assign_non_atomic(acts, pb, data, size);
+	non_sso_data().push_back_intent(acts, pb, value_type('\0'));
 
-	non_sso_data().reserve_intent(acts, pb, size + 1);
-	non_sso_data().assign_non_atomic(pb, data, size);
-	non_sso_data().data()[size] = value_type('\0');
-
-	pmemobj_flush(pb.handle(), &non_sso_data().data()[size], sizeof(value_type));
-	pmemobj_flush(pb.handle(), this, sizeof(*this));
-	pmemobj_drain(pb.handle());
+	//pmemobj_flush(pb.handle(), this, sizeof(*this));
 }
+
+
 
 /**
  * Construct the container with count copies of elements with value ch.
@@ -568,7 +563,7 @@ basic_string<CharT, Traits>::basic_string(const std::basic_string<CharT> &other,
 template <typename CharT, typename Traits>
 basic_string<CharT, Traits>::basic_string(const CharT *s, size_type count)
 {
-	check_pmem_tx();
+	//check_pmem_tx();
 	sso._size = 0;
 
 	allocate(count);
@@ -696,6 +691,9 @@ basic_string<CharT, Traits>::basic_string(basic_string &&other)
 	sso._size = 0;
 
 	move_data(std::move(other));
+
+	other.sso._size = 0;
+	other.enable_sso();
 }
 
 /**
@@ -1126,6 +1124,9 @@ basic_string<CharT, Traits>::assign(basic_string &&other)
 	transaction::run(pop, [&] {
 		destroy_data();
 		move_data(std::move(other));
+
+		other.sso._size = 0;
+		other.enable_sso();
 	});
 
 	return *this;
@@ -3969,6 +3970,9 @@ template <typename CharT, typename Traits>
 void
 basic_string<CharT, Traits>::free_data()
 {
+	if (is_sso_used())
+		return;
+
 	auto pop = get_pool();
 
 	transaction::run(pop, [&] {
@@ -3982,6 +3986,14 @@ basic_string<CharT, Traits>::free_data()
 			enable_sso();
 		}
 	});
+}
+
+template <typename CharT, typename Traits>
+void
+basic_string<CharT, Traits>::free_data(pool_base)
+{
+	sso._size = 0;
+	enable_sso();
 }
 
 /**

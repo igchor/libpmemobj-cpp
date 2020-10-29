@@ -81,12 +81,18 @@ check_tx_abort(pmem::obj::pool<struct root> &pop, const char *str,
 
 	std::string test_str(40, 'x');
 
-	new (mem.get()) S(acts, test_str.data(), 40);
+	new (mem.get()) S(pop, acts, test_str.data(), 40);
+
+	UT_ASSERT(memcmp(mem->data(), test_str.data(), test_str.size()) == 0);
+
+	{
+		pmem::obj::string s2(pop, acts, std::move(*mem));
+		UT_ASSERT(memcmp(s2.data(), test_str.data(), test_str.size()) == 0);
+		s2.free_data(pop);
+	}
 
 	if(pmemobj_publish(pop.handle(), acts.data(), acts.size()))
 		throw std::runtime_error("PUBLISH");
-
-	UT_ASSERT(memcmp(mem->data(), test_str.data(), test_str.size()) == 0);
 
 	nvobj::transaction::run(pop, [&] {
 		nvobj::delete_persistent<S>(mem);
