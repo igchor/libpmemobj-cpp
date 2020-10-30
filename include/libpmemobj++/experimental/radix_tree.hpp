@@ -415,33 +415,26 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 	const Key &key() const;
 	const Value &value() const;
 
-	static persistent_ptr<leaf> make(tagged_node_ptr parent);
+	static persistent_ptr<leaf> make();
 
 	template <typename... Args1, typename... Args2>
-	static persistent_ptr<leaf>
-	make(tagged_node_ptr parent, std::piecewise_construct_t pc,
-	     std::tuple<Args1...> first_args, std::tuple<Args2...> second_args);
+	static persistent_ptr<leaf> make(std::piecewise_construct_t pc,
+					 std::tuple<Args1...> first_args,
+					 std::tuple<Args2...> second_args);
 	template <typename K, typename V>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent, K &&k, V &&v);
-	static persistent_ptr<leaf> make(tagged_node_ptr parent, const Key &k,
-					 const Value &v);
+	static persistent_ptr<leaf> make(K &&k, V &&v);
+	static persistent_ptr<leaf> make(const Key &k, const Value &v);
 	template <typename K, typename... Args>
-	static persistent_ptr<leaf> make_key_args(tagged_node_ptr parent, K &&k,
-						  Args &&... args);
+	static persistent_ptr<leaf> make_key_args(K &&k, Args &&... args);
 	template <typename K, typename V>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 detail::pair<K, V> &&p);
+	static persistent_ptr<leaf> make(detail::pair<K, V> &&p);
 	template <typename K, typename V>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 const detail::pair<K, V> &p);
+	static persistent_ptr<leaf> make(const detail::pair<K, V> &p);
 	template <typename K, typename V>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 std::pair<K, V> &&p);
+	static persistent_ptr<leaf> make(std::pair<K, V> &&p);
 	template <typename K, typename V>
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 const std::pair<K, V> &p);
-	static persistent_ptr<leaf> make(tagged_node_ptr parent,
-					 const leaf &other);
+	static persistent_ptr<leaf> make(const std::pair<K, V> &p);
+	static persistent_ptr<leaf> make(const leaf &other);
 
 private:
 	friend class radix_tree<Key, Value, BytesView>;
@@ -451,8 +444,7 @@ private:
 	template <typename... Args1, typename... Args2, size_t... I1,
 		  size_t... I2>
 	static persistent_ptr<leaf>
-	make(tagged_node_ptr parent, std::piecewise_construct_t,
-	     std::tuple<Args1...> &first_args,
+	make(std::piecewise_construct_t, std::tuple<Args1...> &first_args,
 	     std::tuple<Args2...> &second_args, detail::index_sequence<I1...>,
 	     detail::index_sequence<I2...>);
 
@@ -1298,8 +1290,9 @@ radix_tree<Key, Value, BytesView>::try_emplace(const key_type &k,
 {
 	return internal_emplace(k, [&](tagged_node_ptr parent) {
 		size_++;
-		return leaf::make_key_args(parent, k,
-					   std::forward<Args>(args)...);
+		auto ptr = leaf::make_key_args(k, std::forward<Args>(args)...);
+		ptr->parent = parent;
+		return ptr;
 	});
 }
 
@@ -1338,7 +1331,7 @@ radix_tree<Key, Value, BytesView>::emplace(Args &&... args)
 	std::pair<iterator, bool> ret;
 
 	transaction::run(pop, [&] {
-		auto leaf_ = leaf::make(nullptr, std::forward<Args>(args)...);
+		auto leaf_ = leaf::make(std::forward<Args>(args)...);
 		auto make_leaf = [&](tagged_node_ptr parent) {
 			leaf_->parent = parent;
 			size_++;
@@ -1494,8 +1487,10 @@ radix_tree<Key, Value, BytesView>::try_emplace(key_type &&k, Args &&... args)
 {
 	return internal_emplace(k, [&](tagged_node_ptr parent) {
 		size_++;
-		return leaf::make_key_args(parent, std::move(k),
-					   std::forward<Args>(args)...);
+		auto ptr = leaf::make_key_args(std::move(k),
+					       std::forward<Args>(args)...);
+		ptr->parent = parent;
+		return ptr;
 	});
 }
 
@@ -1543,8 +1538,10 @@ radix_tree<Key, Value, BytesView>::try_emplace(K &&k, Args &&... args) ->
 {
 	return internal_emplace(k, [&](tagged_node_ptr parent) {
 		size_++;
-		return leaf::make_key_args(parent, std::forward<K>(k),
-					   std::forward<Args>(args)...);
+		auto ptr = leaf::make_key_args(std::forward<K>(k),
+					       std::forward<Args>(args)...);
+		ptr->parent = parent;
+		return ptr;
 	});
 }
 
@@ -2806,8 +2803,8 @@ radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::assign_val(
 		auto old_leaf = leaf_;
 
 		transaction::run(pop, [&] {
-			*slot = leaf::make_key_args(old_leaf->parent,
-						    old_leaf->key(), rhs);
+			*slot = leaf::make_key_args(old_leaf->key(), rhs);
+			slot->get_leaf()->parent = old_leaf->parent;
 			delete_persistent<typename radix_tree::leaf>(old_leaf);
 		});
 
@@ -3025,10 +3022,10 @@ radix_tree<Key, Value, BytesView>::leaf::~leaf()
 
 template <typename Key, typename Value, typename BytesView>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent)
+radix_tree<Key, Value, BytesView>::leaf::make()
 {
 	auto t = std::make_tuple();
-	return make(parent, std::piecewise_construct, t, t,
+	return make(std::piecewise_construct, t, t,
 		    typename detail::make_index_sequence<>::type{},
 		    typename detail::make_index_sequence<>::type{});
 }
@@ -3036,32 +3033,29 @@ radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent)
 template <typename Key, typename Value, typename BytesView>
 template <typename... Args1, typename... Args2>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      std::piecewise_construct_t pc,
+radix_tree<Key, Value, BytesView>::leaf::make(std::piecewise_construct_t pc,
 					      std::tuple<Args1...> first_args,
 					      std::tuple<Args2...> second_args)
 {
-	return make(parent, pc, first_args, second_args,
+	return make(pc, first_args, second_args,
 		    typename detail::make_index_sequence<Args1...>::type{},
 		    typename detail::make_index_sequence<Args2...>::type{});
 }
 
 template <typename Key, typename Value, typename BytesView>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      const Key &k, const Value &v)
+radix_tree<Key, Value, BytesView>::leaf::make(const Key &k, const Value &v)
 {
-	return make(parent, std::piecewise_construct, std::forward_as_tuple(k),
+	return make(std::piecewise_construct, std::forward_as_tuple(k),
 		    std::forward_as_tuple(v));
 }
 
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename V>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent, K &&k,
-					      V &&v)
+radix_tree<Key, Value, BytesView>::leaf::make(K &&k, V &&v)
 {
-	return make(parent, std::piecewise_construct,
+	return make(std::piecewise_construct,
 		    std::forward_as_tuple(std::forward<K>(k)),
 		    std::forward_as_tuple(std::forward<V>(v)));
 }
@@ -3069,10 +3063,9 @@ radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent, K &&k,
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename... Args>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make_key_args(tagged_node_ptr parent,
-						       K &&k, Args &&... args)
+radix_tree<Key, Value, BytesView>::leaf::make_key_args(K &&k, Args &&... args)
 {
-	return make(parent, std::piecewise_construct,
+	return make(std::piecewise_construct,
 		    std::forward_as_tuple(std::forward<K>(k)),
 		    std::forward_as_tuple(std::forward<Args>(args)...));
 }
@@ -3080,10 +3073,9 @@ radix_tree<Key, Value, BytesView>::leaf::make_key_args(tagged_node_ptr parent,
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename V>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      detail::pair<K, V> &&p)
+radix_tree<Key, Value, BytesView>::leaf::make(detail::pair<K, V> &&p)
 {
-	return make(parent, std::piecewise_construct,
+	return make(std::piecewise_construct,
 		    std::forward_as_tuple(std::move(p.first)),
 		    std::forward_as_tuple(std::move(p.second)));
 }
@@ -3091,21 +3083,18 @@ radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename V>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      const detail::pair<K, V> &p)
+radix_tree<Key, Value, BytesView>::leaf::make(const detail::pair<K, V> &p)
 {
-	return make(parent, std::piecewise_construct,
-		    std::forward_as_tuple(p.first),
+	return make(std::piecewise_construct, std::forward_as_tuple(p.first),
 		    std::forward_as_tuple(p.second));
 }
 
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename V>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      std::pair<K, V> &&p)
+radix_tree<Key, Value, BytesView>::leaf::make(std::pair<K, V> &&p)
 {
-	return make(parent, std::piecewise_construct,
+	return make(std::piecewise_construct,
 		    std::forward_as_tuple(std::move(p.first)),
 		    std::forward_as_tuple(std::move(p.second)));
 }
@@ -3113,19 +3102,16 @@ radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
 template <typename Key, typename Value, typename BytesView>
 template <typename K, typename V>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      const std::pair<K, V> &p)
+radix_tree<Key, Value, BytesView>::leaf::make(const std::pair<K, V> &p)
 {
-	return make(parent, std::piecewise_construct,
-		    std::forward_as_tuple(p.first),
+	return make(std::piecewise_construct, std::forward_as_tuple(p.first),
 		    std::forward_as_tuple(p.second));
 }
 
 template <typename Key, typename Value, typename BytesView>
 template <typename... Args1, typename... Args2, size_t... I1, size_t... I2>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      std::piecewise_construct_t,
+radix_tree<Key, Value, BytesView>::leaf::make(std::piecewise_construct_t,
 					      std::tuple<Args1...> &first_args,
 					      std::tuple<Args2...> &second_args,
 					      detail::index_sequence<I1...>,
@@ -3146,17 +3132,14 @@ radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
 	new (key_dst) Key(std::forward<Args1>(std::get<I1>(first_args))...);
 	new (val_dst) Value(std::forward<Args2>(std::get<I2>(second_args))...);
 
-	ptr->parent = parent;
-
 	return ptr;
 }
 
 template <typename Key, typename Value, typename BytesView>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(tagged_node_ptr parent,
-					      const leaf &other)
+radix_tree<Key, Value, BytesView>::leaf::make(const leaf &other)
 {
-	return make(parent, other.key(), other.value());
+	return make(other.key(), other.value());
 }
 
 /**
