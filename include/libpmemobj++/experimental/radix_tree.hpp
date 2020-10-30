@@ -106,6 +106,8 @@ class radix_tree {
 	template <bool IsConst>
 	struct radix_tree_iterator;
 
+	struct leaf;
+
 public:
 	using key_type = Key;
 	using mapped_type = Value;
@@ -118,6 +120,8 @@ public:
 	using reverse_iterator = std::reverse_iterator<iterator>;
 	using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 	using difference_type = std::ptrdiff_t;
+	using node_type = leaf;
+	using node_handle = persistent_ptr<leaf>;
 
 	radix_tree();
 
@@ -136,6 +140,7 @@ public:
 	template <class... Args>
 	std::pair<iterator, bool> emplace(Args &&... args);
 
+	std::pair<iterator, bool> insert(node_handle &&node);
 	std::pair<iterator, bool> insert(const value_type &v);
 	std::pair<iterator, bool> insert(value_type &&v);
 	template <typename P,
@@ -292,7 +297,6 @@ private:
 	static constexpr bitn_t FIRST_NIB = 8 - SLICE;
 
 	struct tagged_node_ptr;
-	struct leaf;
 	struct node;
 
 	/*** pmem members ***/
@@ -417,12 +421,14 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 
 	static persistent_ptr<leaf> make();
 
-	template <typename... Args1, typename... Args2>
-	static persistent_ptr<leaf> make(std::piecewise_construct_t pc,
-					 std::tuple<Args1...> first_args,
-					 std::tuple<Args2...> second_args);
-	template <typename K, typename V>
-	static persistent_ptr<leaf> make(K &&k, V &&v);
+	template <typename... Args1, typename... Args2,
+		  typename Allocator = allocator<void>>
+	static persistent_ptr<leaf>
+	make(std::piecewise_construct_t pc, std::tuple<Args1...> first_args,
+	     std::tuple<Args2...> second_args, Allocator a = Allocator{});
+	template <typename K, typename V, typename Allocator = allocator<void>>
+	static persistent_ptr<leaf> make(K &&k, V &&v,
+					 Allocator a = Allocator{});
 	static persistent_ptr<leaf> make(const Key &k, const Value &v);
 	template <typename K, typename... Args>
 	static persistent_ptr<leaf> make_key_args(K &&k, Args &&... args);
@@ -435,6 +441,8 @@ struct radix_tree<Key, Value, BytesView>::leaf {
 	template <typename K, typename V>
 	static persistent_ptr<leaf> make(const std::pair<K, V> &p);
 	static persistent_ptr<leaf> make(const leaf &other);
+	static persistent_ptr<leaf>
+	make(typename tree_type::node_handle &&node);
 
 private:
 	friend class radix_tree<Key, Value, BytesView>;
@@ -442,11 +450,11 @@ private:
 	leaf() = default;
 
 	template <typename... Args1, typename... Args2, size_t... I1,
-		  size_t... I2>
+		  size_t... I2, typename Allocator = allocator<void>>
 	static persistent_ptr<leaf>
 	make(std::piecewise_construct_t, std::tuple<Args1...> &first_args,
 	     std::tuple<Args2...> &second_args, detail::index_sequence<I1...>,
-	     detail::index_sequence<I2...>);
+	     detail::index_sequence<I2...>, Allocator a = Allocator{});
 
 	tagged_node_ptr parent = nullptr;
 };
@@ -603,6 +611,12 @@ public:
 		  typename Enable = typename std::enable_if<
 			  !detail::is_inline_string<V>::value>::type>
 	void assign_val(T &&rhs);
+
+	template <typename V = Value,
+		  typename Enable = typename std::enable_if<
+			  detail::is_inline_string<V>::value>::type>
+	void replace_node(
+		typename radix_tree<Key, Value, BytesView>::node_handle &&node);
 
 	radix_tree_iterator &operator++();
 	radix_tree_iterator &operator--();
@@ -1342,6 +1356,41 @@ radix_tree<Key, Value, BytesView>::emplace(Args &&... args)
 
 		if (!ret.second)
 			delete_persistent<leaf>(leaf_);
+	});
+
+	return ret;
+}
+
+/**
+ * Inserts node if the tree doesn't already contain an element with an
+ * equivalent key.
+ *
+ * @param[in] node_handle to element to insert.
+ *
+ * @return a pair consisting of an iterator to the inserted element (or
+ * to the element that prevented the insertion) and a bool denoting
+ * whether the insertion took place.
+ *
+ * @throw pmem::transaction_error when snapshotting failed.
+ * @throw pmem::transaction_alloc_error when allocating new memory
+ * failed.
+ * @throw rethrows constructor exception.
+ */
+template <typename Key, typename Value, typename BytesView>
+std::pair<typename radix_tree<Key, Value, BytesView>::iterator, bool>
+radix_tree<Key, Value, BytesView>::insert(node_handle &&leaf)
+{
+	auto pop = pool_base(pmemobj_pool_by_ptr(this));
+	std::pair<iterator, bool> ret;
+
+	transaction::run(pop, [&] {
+		auto make_leaf = [&](tagged_node_ptr parent) {
+			leaf->parent = parent;
+			size_++;
+			return leaf;
+		};
+
+		ret = internal_emplace(leaf->key(), make_leaf);
 	});
 
 	return ret;
@@ -2813,6 +2862,41 @@ radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::assign_val(
 }
 
 /**
+ * XXX
+ */
+template <typename Key, typename Value, typename BytesView>
+template <bool IsConst>
+template <typename V, typename Enable>
+void
+radix_tree<Key, Value, BytesView>::radix_tree_iterator<IsConst>::replace_node(
+	typename radix_tree<Key, Value, BytesView>::node_handle &&node)
+{
+	auto pop = pool_base(pmemobj_pool_by_ptr(leaf_));
+
+	tagged_node_ptr *slot;
+
+	if (!leaf_->parent) {
+		assert(root->get_leaf() == leaf_);
+		slot = root;
+	} else {
+		slot = const_cast<tagged_node_ptr *>(
+			&*leaf_->parent->find_child(leaf_));
+	}
+
+	auto old_leaf = leaf_;
+
+	// XXX - exception if keys do not match
+
+	transaction::run(pop, [&] {
+		*slot = node;
+		node->parent = old_leaf->parent;
+		delete_persistent<typename radix_tree::leaf>(old_leaf);
+	});
+
+	leaf_ = slot->get_leaf();
+}
+
+/**
  * Assign value to leaf pointed by the iterator.
  *
  * This function is transactional
@@ -3031,15 +3115,16 @@ radix_tree<Key, Value, BytesView>::leaf::make()
 }
 
 template <typename Key, typename Value, typename BytesView>
-template <typename... Args1, typename... Args2>
+template <typename... Args1, typename... Args2, typename Allocator>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
 radix_tree<Key, Value, BytesView>::leaf::make(std::piecewise_construct_t pc,
 					      std::tuple<Args1...> first_args,
-					      std::tuple<Args2...> second_args)
+					      std::tuple<Args2...> second_args,
+					      Allocator a)
 {
 	return make(pc, first_args, second_args,
 		    typename detail::make_index_sequence<Args1...>::type{},
-		    typename detail::make_index_sequence<Args2...>::type{});
+		    typename detail::make_index_sequence<Args2...>::type{}, a);
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -3051,13 +3136,13 @@ radix_tree<Key, Value, BytesView>::leaf::make(const Key &k, const Value &v)
 }
 
 template <typename Key, typename Value, typename BytesView>
-template <typename K, typename V>
+template <typename K, typename V, typename Allocator>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
-radix_tree<Key, Value, BytesView>::leaf::make(K &&k, V &&v)
+radix_tree<Key, Value, BytesView>::leaf::make(K &&k, V &&v, Allocator a)
 {
 	return make(std::piecewise_construct,
 		    std::forward_as_tuple(std::forward<K>(k)),
-		    std::forward_as_tuple(std::forward<V>(v)));
+		    std::forward_as_tuple(std::forward<V>(v)), a);
 }
 
 template <typename Key, typename Value, typename BytesView>
@@ -3109,15 +3194,16 @@ radix_tree<Key, Value, BytesView>::leaf::make(const std::pair<K, V> &p)
 }
 
 template <typename Key, typename Value, typename BytesView>
-template <typename... Args1, typename... Args2, size_t... I1, size_t... I2>
+template <typename... Args1, typename... Args2, size_t... I1, size_t... I2,
+	  typename Allocator>
 persistent_ptr<typename radix_tree<Key, Value, BytesView>::leaf>
 radix_tree<Key, Value, BytesView>::leaf::make(std::piecewise_construct_t,
 					      std::tuple<Args1...> &first_args,
 					      std::tuple<Args2...> &second_args,
 					      detail::index_sequence<I1...>,
-					      detail::index_sequence<I2...>)
+					      detail::index_sequence<I2...>,
+					      Allocator a)
 {
-	standard_alloc_policy<void> a;
 	auto key_size = total_sizeof<Key>::value(std::get<I1>(first_args)...);
 	auto val_size =
 		total_sizeof<Value>::value(std::get<I2>(second_args)...);

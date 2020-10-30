@@ -14,6 +14,69 @@
 namespace nvobj = pmem::obj;
 namespace nvobjex = pmem::obj::experimental;
 
+template <typename T>
+struct actions {
+	actions(nvobj::pool_base p): pop(p) {
+
+	}
+
+	~actions() {
+		if (acts.size()) {
+			pmemobj_cancel(pop.handle(), acts.data(), acts.size());
+		}
+	}
+
+	nvobj::persistent_ptr<T> reserve(size_t n) {
+		acts.emplace_back();
+		nvobj::persistent_ptr<T> ptr = pmemobj_reserve(pop.handle(), &acts.back(), n * sizeof(T), 0);
+
+		if (ptr == nullptr) {
+				throw std::bad_alloc{};
+		}
+
+		return ptr;
+	}
+
+	void publish() {
+		auto ret = pmemobj_publish(pop.handle(), acts.data(), acts.size());
+		if (ret)
+			throw std::runtime_error("XXX");
+
+		acts.clear();
+	}
+
+	void tx_publish() {
+		auto ret = pmemobj_tx_publish(acts.data(), acts.size());
+		if (ret)
+			throw std::runtime_error("XXX");
+
+		acts.clear();
+	}
+
+	std::vector<pobj_action> acts;
+	nvobj::pool_base pop;
+};
+
+template <typename T>
+struct intent_allocator {
+	using value_type = T;
+	using pointer = nvobj::persistent_ptr<T>;
+	using const_pointer = nvobj::persistent_ptr<const T>;
+	using reference = T&;
+	using const_reference = const T&;
+	using size_type = std::size_t;
+
+	intent_allocator(actions<T> &acts): acts(acts) {
+
+	}
+
+	pointer allocate(size_t n, const_pointer = 0) {
+		return acts.reserve(n);
+	}
+
+	actions<T> &acts;
+};
+
 using container_int =
 	nvobjex::radix_tree<nvobjex::inline_string, nvobj::p<unsigned>>;
 using container_string =

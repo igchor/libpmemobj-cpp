@@ -888,6 +888,71 @@ test_inline_string_wchart_key(nvobj::pool<root> &pop)
 	UT_ASSERT(OID_IS_NULL(pmemobj_first(pop.handle())));
 }
 
+void
+test_node_handle(nvobj::pool<root> &pop)
+{
+	auto r = pop.root();
+
+	nvobj::transaction::run(pop, [&] {
+		r->radix_str = nvobj::make_persistent<container_string>();
+	});
+
+	nvobj::transaction::run(pop, [&] {
+		auto n = container_string::node_type::make("abc", "abc");
+		auto ret = r->radix_str->insert(std::move(n));
+		UT_ASSERT(ret.second);
+	});
+
+	UT_ASSERT(r->radix_str->count("abc") == 1);
+	auto it = r->radix_str->find("abc");
+	UT_ASSERT(nvobj::string_view(it->key()).compare("abc"));
+	UT_ASSERT(nvobj::string_view(it->value()).compare("abc"));
+
+	nvobj::transaction::run(pop, [&] {
+		auto n = container_string::node_type::make("abc", "xxx");
+		auto ret = r->radix_str->insert(std::move(n));
+		UT_ASSERT(!ret.second);
+
+		UT_ASSERT(nvobj::string_view(n->key()).compare("abc"));
+		UT_ASSERT(nvobj::string_view(n->value()).compare("abc"));
+
+		// XXX: implement destruction of node_handle
+		// UT_ASSERT(OID_IS_NULL(pmemobj_first(pop.handle())));
+	});
+
+	it = r->radix_str->find("abc");
+	UT_ASSERT(nvobj::string_view(it->key()).compare("abc"));
+	UT_ASSERT(nvobj::string_view(it->value()).compare("abc"));
+
+	actions<char> acts(pop);
+	auto n = container_string::node_type::make(
+		"111", "111", intent_allocator<char>(acts));
+
+	nvobj::transaction::run(pop, [&] {
+		r->radix_str->insert(std::move(n));
+		acts.tx_publish();
+	});
+
+	it = r->radix_str->find("111");
+	UT_ASSERT(nvobj::string_view(it->key()).compare("111"));
+	UT_ASSERT(nvobj::string_view(it->value()).compare("111"));
+
+	n = container_string::node_type::make("111", "222",
+					      intent_allocator<char>(acts));
+	it.replace_node(std::move(n));
+	// acts.tx_publish();
+
+	it = r->radix_str->find("111");
+	UT_ASSERT(nvobj::string_view(it->key()).compare("222"));
+	UT_ASSERT(nvobj::string_view(it->value()).compare("222"));
+
+	nvobj::transaction::run(pop, [&] {
+		nvobj::delete_persistent<container_string>(r->radix_str);
+	});
+
+	UT_ASSERT(OID_IS_NULL(pmemobj_first(pop.handle())));
+}
+
 static void
 test(int argc, char *argv[])
 {
