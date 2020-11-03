@@ -27,6 +27,11 @@
 
 namespace nvobj = pmem::obj;
 
+void loop_forever()
+{
+	while(true) {}
+}
+
 namespace
 {
 
