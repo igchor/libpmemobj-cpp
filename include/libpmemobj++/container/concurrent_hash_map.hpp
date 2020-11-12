@@ -22,7 +22,7 @@
 #include <libpmemobj++/persistent_ptr.hpp>
 #include <libpmemobj++/transaction.hpp>
 
-#include <libpmemobj++/detail/persistent_pool_ptr.hpp>
+#include <libpmemobj++/experimental/self_relative_ptr.hpp>
 #include <libpmemobj++/shared_mutex.hpp>
 
 #include <libpmemobj++/detail/enumerable_thread_specific.hpp>
@@ -284,7 +284,7 @@ struct hash_map_node {
 	using value_type = detail::pair<const Key, T>;
 
 	/** Persistent pointer type for next. */
-	using node_ptr_t = detail::persistent_pool_ptr<
+	using node_ptr_t = experimental::self_relative_ptr<
 		hash_map_node<Key, T, mutex_t, scoped_t>>;
 
 	/** Next node in chain. */
@@ -771,7 +771,7 @@ public:
 	using node = hash_map_node<Key, T, mutex_t, scoped_t>;
 
 	/** Node base pointer. */
-	using node_ptr_t = detail::persistent_pool_ptr<node>;
+	using node_ptr_t = experimental::self_relative_ptr<node>;
 
 	/** Bucket type. */
 	struct bucket {
@@ -1218,9 +1218,9 @@ public:
 	 */
 	template <typename Node, typename... Args>
 	void
-	insert_new_node_internal(bucket *b,
-				 detail::persistent_pool_ptr<Node> &new_node,
-				 Args &&... args)
+	insert_new_node_internal(
+		bucket *b, experimental::self_relative_ptr<Node> &new_node,
+		Args &&... args)
 	{
 		assert(pmemobj_tx_stage() == TX_STAGE_WORK);
 
@@ -1235,7 +1235,8 @@ public:
 	 */
 	template <typename Node, typename... Args>
 	size_type
-	insert_new_node(bucket *b, detail::persistent_pool_ptr<Node> &new_node,
+	insert_new_node(bucket *b,
+			experimental::self_relative_ptr<Node> &new_node,
 			Args &&... args)
 	{
 		pool_base pop = get_pool_base();
@@ -1423,8 +1424,7 @@ public: /* workaround */
 		if (my_index <= my_map->mask()) {
 			bucket_accessor acc(my_map, my_index);
 			my_bucket = acc.get();
-			my_node = static_cast<node *>(
-				my_bucket->node_list.get(my_map->my_pool_uuid));
+			my_node = my_bucket->node_list.get();
 
 			if (!my_node) {
 				advance_to_next_bucket();
@@ -1475,8 +1475,7 @@ public:
 	hash_map_iterator &
 	operator++()
 	{
-		my_node = static_cast<node *>(
-			my_node->next.get((my_map->my_pool_uuid)));
+		my_node = my_node->next.get();
 
 		if (!my_node)
 			advance_to_next_bucket();
@@ -1535,9 +1534,7 @@ private:
 			my_bucket = acc.get();
 
 			if (my_bucket->node_list) {
-				my_node = static_cast<node *>(
-					my_bucket->node_list.get(
-						my_map->my_pool_uuid));
+				my_node = my_bucket->node_list.get();
 
 				my_index = k;
 
@@ -1683,14 +1680,12 @@ protected:
 		concurrent_hash_map_internal::scoped_lock_traits<scoped_t>;
 
 	friend class const_accessor;
-	using persistent_node_ptr_t = detail::persistent_pool_ptr<node>;
+	using persistent_node_ptr_t = experimental::self_relative_ptr<node>;
 
 	void
 	delete_node(const node_ptr_t &n)
 	{
-		delete_persistent<node>(
-			detail::static_persistent_pool_pointer_cast<node>(n)
-				.get_persistent_ptr(this->my_pool_uuid));
+		delete_persistent<node>(n);
 	}
 
 	template <typename K>
@@ -1699,15 +1694,10 @@ protected:
 	{
 		assert(b->is_rehashed(std::memory_order_relaxed));
 
-		persistent_node_ptr_t n =
-			detail::static_persistent_pool_pointer_cast<node>(
-				b->node_list);
+		persistent_node_ptr_t n = b->node_list;
 
-		while (n &&
-		       !key_equal{}(key,
-				    n.get(this->my_pool_uuid)->item.first)) {
-			n = detail::static_persistent_pool_pointer_cast<node>(
-				n.get(this->my_pool_uuid)->next);
+		while (n && !key_equal{}(key, n->item.first)) {
+			n = n->next;
 		}
 
 		return n;
@@ -1865,10 +1855,7 @@ protected:
 	hashcode_type
 	get_hash_code(node_ptr_t &n)
 	{
-		return hasher{}(
-			detail::static_persistent_pool_pointer_cast<node>(n)(
-				this->my_pool_uuid)
-				->item.first);
+		return hasher{}(n->item.first);
 	}
 
 	template <bool serial>
@@ -1939,12 +1926,12 @@ protected:
 					*p_new = n;
 
 					/* exclude from b_old */
-					*p_old = n(this->my_pool_uuid)->next;
+					*p_old = n->next;
 
-					p_new = &(n(this->my_pool_uuid)->next);
+					p_new = &(n->next);
 				} else {
 					/* iterate to next item */
-					p_old = &(n(this->my_pool_uuid)->next);
+					p_old = &(n->next);
 				}
 			}
 
@@ -2926,8 +2913,7 @@ protected:
 			vec.emplace_back(base, h, true /*writer*/);
 			bucket *b = vec.back().get();
 
-			auto node_ptr = static_cast<node *>(
-				b->node_list.get(base->my_pool_uuid));
+			auto node_ptr = b->node_list;
 
 			while (node_ptr) {
 				const_accessor ca;
@@ -2938,9 +2924,7 @@ protected:
 					return nullptr;
 				}
 
-				node_ptr =
-					static_cast<node *>(node_ptr->next.get(
-						(base->my_pool_uuid)));
+				node_ptr = node_ptr->next;
 			}
 
 			return b;
@@ -3004,8 +2988,7 @@ protected:
 	void
 	defrag_save_nodes(bucket *b, pmem::obj::defrag &defrag)
 	{
-		auto node_ptr = static_cast<node *>(
-			b->node_list.get(this->my_pool_uuid));
+		auto node_ptr = b->node_list;
 
 		while (node_ptr) {
 			/*
@@ -3016,8 +2999,7 @@ protected:
 			defrag.add(node_ptr->item.first);
 			defrag.add(node_ptr->item.second);
 
-			node_ptr = static_cast<node *>(
-				node_ptr->next.get((this->my_pool_uuid)));
+			node_ptr = node_ptr->next;
 		}
 	}
 }; // class concurrent_hash_map
@@ -3084,9 +3066,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 		}
 
 		/* No need to acquire the item or item acquired */
-		if (!result ||
-		    try_acquire_item(
-			    result, node.get(this->my_pool_uuid)->mutex, write))
+		if (!result || try_acquire_item(result, node->mutex, write))
 			break;
 
 		/* the wait takes really long, restart the
@@ -3102,7 +3082,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 	}
 
 	if (result) {
-		result->my_node = node.get_persistent_ptr(this->my_pool_uuid);
+		result->my_node = node;
 		result->my_hash = h;
 	}
 
@@ -3155,9 +3135,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 		}
 
 		/* No need to acquire the item or item acquired */
-		if (!result ||
-		    try_acquire_item(
-			    result, node.get(this->my_pool_uuid)->mutex, write))
+		if (!result || try_acquire_item(result, node->mutex, write))
 			break;
 
 		/* the wait takes really long, restart the
@@ -3173,7 +3151,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 	}
 
 	if (result) {
-		result->my_node = node.get_persistent_ptr(this->my_pool_uuid);
+		result->my_node = node;
 		result->my_hash = h;
 	}
 
@@ -3208,12 +3186,8 @@ search:
 	node_ptr_t *p = &b->node_list;
 	n = *p;
 
-	while (n &&
-	       !key_equal{}(key,
-			    detail::static_persistent_pool_pointer_cast<node>(
-				    n)(this->my_pool_uuid)
-				    ->item.first)) {
-		p = &n(this->my_pool_uuid)->next;
+	while (n && !key_equal{}(key, n->item.first)) {
+		p = &n->next;
 		n = *p;
 	}
 
@@ -3231,7 +3205,7 @@ search:
 		goto search;
 	}
 
-	persistent_ptr<node> del = n(this->my_pool_uuid);
+	persistent_ptr<node> del = n;
 
 	{
 		/* We cannot remove this element immediately because
@@ -3377,7 +3351,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 	for (segment_index_t i = 0; i < sz; ++i) {
 		for (node_ptr_t n = segment[i].node_list; n;
 		     n = segment[i].node_list) {
-			segment[i].node_list = n(this->my_pool_uuid)->next;
+			segment[i].node_list = n->next;
 			delete_node(n);
 		}
 	}
@@ -3413,7 +3387,7 @@ concurrent_hash_map<Key, T, Hash, KeyEqual, MutexType,
 
 		assert(b->is_rehashed(std::memory_order_relaxed));
 
-		detail::persistent_pool_ptr<node> p;
+		experimental::self_relative_ptr<node> p;
 		insert_new_node(b, p, *first);
 	}
 }
