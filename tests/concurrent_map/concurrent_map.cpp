@@ -164,8 +164,11 @@ emplace_and_lookup_duplicates_test(nvobj::pool<root> &pop, MapType *map)
 		threads.emplace_back([&]() {
 			for (int i = 0;
 			     i < static_cast<int>(NUMBER_ITEMS_INSERT); ++i) {
-				map->emplace(gen_key(*map, i),
-					     gen_key(*map, i));
+
+				auto node = map->make_node(gen_key(*map, i),
+							   gen_key(*map, i));
+
+				map->insert(node);
 			}
 		});
 	}

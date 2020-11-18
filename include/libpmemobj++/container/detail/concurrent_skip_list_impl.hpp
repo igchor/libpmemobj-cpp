@@ -2284,6 +2284,55 @@ public:
 		return _compare;
 	}
 
+	template <typename K, typename... Args>
+	persistent_node_ptr
+	make_node(K &&k, Args &&... args)
+	{
+		size_type height = random_level();
+		obj::pool_base pop = get_pool_base();
+		persistent_node_ptr node;
+
+		obj::transaction::run(pop, [&] {
+			node = create_node(
+				std::forward_as_tuple(height),
+				std::forward_as_tuple(
+					std::forward<K>(k),
+					std::forward<Args>(args)...));
+		});
+
+		return node;
+	}
+
+	std::pair<iterator, bool>
+	insert(persistent_node_ptr node)
+	{
+		tls_entry_type &tls_entry = tls_data.local();
+		assert(tls_entry.ptr == nullptr);
+
+		std::pair<iterator, bool> insert_result = internal_insert_node(
+			node->value().first, node->height(),
+			[&](const next_array_type &next_nodes)
+				-> persistent_node_ptr & {
+				obj::pool_base pop = get_pool_base();
+
+				node->set_nexts(pop, next_nodes.data(),
+						node->height());
+
+				obj::transaction::manual tx(pop);
+				tls_entry.ptr = node;
+				++(tls_entry.size_diff);
+				tls_entry.insert_stage = in_progress;
+				obj::transaction::commit();
+
+				assert(tls_entry.ptr != nullptr);
+				return tls_entry.ptr;
+			});
+
+		assert(tls_entry.ptr == nullptr);
+
+		return insert_result;
+	}
+
 private:
 	/* Status flags stored in insert_stage field */
 	enum insert_stage_type : uint8_t { not_started = 0, in_progress = 1 };
