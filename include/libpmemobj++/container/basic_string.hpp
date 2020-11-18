@@ -68,6 +68,27 @@ public:
 
 	/* Constructors */
 	basic_string();
+
+	basic_string(sized_ptr<CharT> ptr)
+	{
+		check_pmem_tx();
+
+		disable_sso();
+		detail::create<non_sso_type>(&non_sso_data(ptr));
+	}
+
+	void
+	assign(sized_ptr<CharT> ptr)
+	{
+		pool_base pb = get_pool();
+
+		transaction::run(pb, [&] {
+			destroy_data();
+			disable_sso();
+			detail::create<non_sso_type>(&non_sso_data(ptr));
+		});
+	}
+
 	basic_string(size_type count, CharT ch);
 	basic_string(const basic_string &other, size_type pos,
 		     size_type count = npos);

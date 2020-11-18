@@ -33,6 +33,12 @@ namespace pmem
 namespace obj
 {
 
+template <typename T>
+struct sized_ptr {
+	persistent_ptr<T[]> data;
+	size_t size;
+};
+
 /**
  * pmem::obj::vector - persistent container with std::vector compatible
  * interface.
@@ -60,6 +66,31 @@ public:
 
 	/* Constructors */
 	vector();
+
+	vector(sized_ptr<T> ptr)
+	{
+		check_pmem();
+		check_tx_stage_work();
+
+		_data = ptr.data;
+		_size = ptr.size;
+		_capacity = ptr.size;
+	}
+
+	void
+	assign(sized_ptr<T> ptr)
+	{
+		pool_base pb = get_pool();
+
+		transaction::run(pb, [&] {
+			dealloc();
+
+			_data = ptr.data;
+			_size = ptr.size;
+			_capacity = ptr.size;
+		});
+	}
+
 	vector(size_type count, const value_type &value);
 	explicit vector(size_type count);
 	template <typename InputIt,
