@@ -900,7 +900,7 @@ test(int argc, char *argv[])
 
 	try {
 		pop = nvobj::pool<struct root>::create(path, "radix_basic",
-						       10 * PMEMOBJ_MIN_POOL,
+						       100 * PMEMOBJ_MIN_POOL,
 						       S_IWUSR | S_IRUSR);
 	} catch (pmem::pool_error &pe) {
 		UT_FATAL("!pool::create: %s %s", pe.what(), path);

@@ -281,7 +281,7 @@ private:
 	using bitn_t = uint8_t;
 
 	/* Size of a chunk which differentiates subtrees of a node */
-	static constexpr std::size_t SLICE = 16;
+	static constexpr std::size_t SLICE = 12;
 	/* Mask for SLICE */
 	static constexpr std::size_t NIB = ((1ULL << SLICE) - 1);
 	/* Number of children in internal nodes */
@@ -289,7 +289,7 @@ private:
 	/* Mask for SLICE */
 	static constexpr bitn_t SLICE_MASK = (bitn_t) ~(SLICE - 1);
 	/* Position of the first SLICE */
-	static constexpr bitn_t FIRST_NIB = 0;
+	static constexpr bitn_t FIRST_NIB = 4;
 
 	struct tagged_node_ptr;
 	struct leaf;
