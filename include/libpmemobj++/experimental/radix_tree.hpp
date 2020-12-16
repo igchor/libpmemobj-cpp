@@ -281,7 +281,7 @@ private:
 	using bitn_t = uint8_t;
 
 	/* Size of a chunk which differentiates subtrees of a node */
-	static constexpr std::size_t SLICE = 4;
+	static constexpr std::size_t SLICE = 16;
 	/* Mask for SLICE */
 	static constexpr std::size_t NIB = ((1ULL << SLICE) - 1);
 	/* Number of children in internal nodes */
@@ -289,7 +289,7 @@ private:
 	/* Mask for SLICE */
 	static constexpr bitn_t SLICE_MASK = (bitn_t) ~(SLICE - 1);
 	/* Position of the first SLICE */
-	static constexpr bitn_t FIRST_NIB = 8 - SLICE;
+	static constexpr bitn_t FIRST_NIB = 0;
 
 	struct tagged_node_ptr;
 	struct leaf;
@@ -340,8 +340,8 @@ private:
 	void check_pmem();
 	void check_tx_stage_work();
 
-	static_assert(sizeof(node) == 256,
-		      "Internal node should have size equal to 256 bytes.");
+	//static_assert(sizeof(node) == 256,
+	//	      "Internal node should have size equal to 256 bytes.");
 };
 
 template <typename Key, typename Value, typename BytesView>
@@ -557,8 +557,8 @@ struct radix_tree<Key, Value, BytesView>::node {
 	auto make_iterator(const tagged_node_ptr *ptr) const
 		-> decltype(begin<Direction>());
 
-	uint8_t padding[256 - sizeof(parent) - sizeof(leaf) - sizeof(child) -
-			sizeof(byte) - sizeof(bit)];
+	//uint8_t padding[256 - sizeof(parent) - sizeof(leaf) - sizeof(child) -
+	//		sizeof(byte) - sizeof(bit)];
 };
 
 /**
