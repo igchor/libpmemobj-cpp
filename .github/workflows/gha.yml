@@ -36,23 +36,33 @@ jobs:
                  "TYPE=package OS=fedora OS_VER=32",
                  "TYPE=package OS=ubuntu OS_VER=20.04"]
     steps:
+      - name: Get tag and branch
+        run: |
+          echo "BRANCH=${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+          echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
       - name: Get release version
         if: github.event_name == 'release'
-        id: get_version
-        run: echo ::set-output name=VERSION::$(echo ${GITHUB_REF#refs/tags/} | grep -E "^[0-9]+.[0-9]+(-rc[0-9]+)?$" | cut -f 1,2 -d . | cut -f 1 -d -)
+        id: get_release_version
+        run: echo ::set-output name=VERSION::$(echo $TAG | grep -E "^[0-9]+.[0-9]+(-rc[0-9]+)?$" | cut -f 1,2 -d . | cut -f 1 -d -)
 
       - name: Print version (major.minor)
-        if: github.event_name == 'release' && steps.get_version.outputs.VERSION != ''
-        run: echo ${{ steps.get_version.outputs.VERSION }}
+        if: github.event_name == 'release' && steps.get_release_version.outputs.VERSION != ''
+        run: echo ${{ steps.get_release_version.outputs.VERSION }}
 
-      - name: Set image version and force image action
-        if: github.event_name == 'release' && steps.get_version.outputs.VERSION != ''
+      - name: Set image version and force image action for release
+        if: github.event_name == 'release' && steps.get_release_version.outputs.VERSION != ''
         run: |
-          echo "IMG_VER=${{ steps.get_version.outputs.VERSION }}" >> $GITHUB_ENV
+          echo "IMG_VER=${{ steps.get_release_version.outputs.VERSION }}" >> $GITHUB_ENV
+          echo "FORCE_IMAGE_ACTION=rebuild" >> $GITHUB_ENV
+
+      - name: Set image version and force image action for stable branch
+        if: startsWith(github.ref, 'refs/heads/stable-')
+        run: |
+          echo "IMG_VER=$($echo $BRANCH | cut -d - -f 2)" >> $GITHUB_ENV
           echo "FORCE_IMAGE_ACTION=rebuild" >> $GITHUB_ENV
 
       - name:  XXX
-        if: github.event_name == 'release' && steps.get_version.outputs.VERSION != ''
         run: |
           echo "img ver: $IMG_VER"
           echo "img action $FORCE_IMAGE_ACTION"
