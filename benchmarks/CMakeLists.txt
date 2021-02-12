@@ -48,3 +48,5 @@ if (TEST_SELF_RELATIVE_POINTER)
 	add_benchmark(self_relative_pointer_get self_relative_pointer/get.cpp)
 	add_benchmark(self_relative_pointer_assignment self_relative_pointer/assignment.cpp)
 endif()
+
+add_benchmark(radix_tree_perf radix_tree_perf.cpp)
