@@ -19,23 +19,27 @@ test_iterators(nvobj::pool<root> &pop)
 
 	nvobj::transaction::run(pop, [&] {
 		r->radix_int = nvobj::make_persistent<container_int>();
-		r->radix_int->try_emplace("", 0U);
-		r->radix_int->try_emplace("ab", 1U);
-		r->radix_int->try_emplace("ba", 2U);
-		r->radix_int->try_emplace("a", 3U);
-		r->radix_int->try_emplace("b", 4U);
-
-		r->radix_str = nvobj::make_persistent<container_string>();
-		r->radix_str->try_emplace("", "");
-
-		r->radix_str->try_emplace(" ", "ab");
-		r->radix_str->try_emplace("  ", "ab");
-
-		r->radix_str->try_emplace("ab", "ab");
-		r->radix_str->try_emplace("ba", "ba");
-		r->radix_str->try_emplace("a", "a");
-		r->radix_str->try_emplace("b", "b");
 	});
+	r->radix_int->try_emplace_act("", 0U);
+	r->radix_int->try_emplace_act("ab", 1U);
+	r->radix_int->try_emplace_act("ba", 2U);
+	r->radix_int->try_emplace_act("a", 3U);
+	r->radix_int->try_emplace_act("b", 4U);
+
+	nvobj::transaction::run(pop, [&] {
+		r->radix_str = nvobj::make_persistent<container_string>();
+	});
+
+	r->radix_str->try_emplace_act("", "");
+
+	r->radix_str->try_emplace_act(" ", "ab");
+	r->radix_str->try_emplace_act("  ", "ab");
+
+	r->radix_str->try_emplace_act("ab", "ab");
+	r->radix_str->try_emplace_act("ba", "ba");
+	r->radix_str->try_emplace_act("a", "a");
+	r->radix_str->try_emplace_act("b", "b");
+	//});
 
 	auto it = r->radix_int->find("a");
 	UT_ASSERT(nvobj::string_view(it->key()).compare(std::string("a")) == 0);

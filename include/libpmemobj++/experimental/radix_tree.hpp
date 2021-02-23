@@ -31,9 +31,12 @@
 #include <libpmemobj++/transaction.hpp>
 #include <libpmemobj++/utils.hpp>
 
+#include <libpmemobj/action_base.h>
+
 #include <algorithm>
 #include <iostream>
 #include <string>
+#include <vector>
 #if __cpp_lib_endian
 #include <bit>
 #endif
@@ -55,6 +58,67 @@ namespace obj
 
 namespace experimental
 {
+
+class actions {
+public:
+	actions(obj::pool_base pop, size_t cnt = 1) : pop(pop)
+	{
+		acts.reserve(cnt);
+	}
+
+	~actions()
+	{
+		if (acts.size() > 0)
+			pmemobj_cancel(pop.handle(), acts.data(), acts.size());
+	}
+
+	void *
+	allocate(size_t size)
+	{
+		acts.emplace_back();
+		return pmemobj_direct(
+			pmemobj_reserve(pop.handle(), &acts.back(), size, 0));
+	}
+
+	void
+	set_value(uint64_t *ptr, uint64_t value)
+	{
+		acts.emplace_back();
+		pmemobj_set_value(pop.handle(), &acts.back(), ptr, value);
+	}
+
+	template <typename T>
+	void
+	free(obj::persistent_ptr<T> data)
+	{
+		acts.emplace_back();
+		pmemobj_defer_free(pop.handle(), data.raw(), &acts.back());
+	}
+
+	void
+	publish()
+	{
+		pmemobj_drain(pop.handle());
+
+		if (pmemobj_publish(pop.handle(), acts.data(), acts.size()) !=
+		    0)
+			throw std::runtime_error(
+				std::string("publish failed: ") +
+				pmemobj_errormsg());
+
+		acts.clear();
+	}
+
+	obj::pool_base
+	get_pool()
+	{
+		return pop;
+	}
+
+private:
+	obj::pool_base pop;
+	std::vector<pobj_action> acts;
+};
 
 /**
  * Radix tree is an associative, ordered container. Its API is similar
@@ -276,6 +340,9 @@ public:
 	friend std::ostream &operator<<(std::ostream &os,
 					const radix_tree<K, V, BV> &tree);
 
+	template <typename K, typename V>
+	void try_emplace_act(K &&k, V &&v);
+
 private:
 	using byten_t = uint64_t;
 	using bitn_t = uint8_t;
@@ -302,6 +369,7 @@ private:
 	/* helper functions */
 	template <typename K, typename F, class... Args>
 	std::pair<iterator, bool> internal_emplace(const K &, F &&);
+
 	template <typename K>
 	leaf *internal_find(const K &k) const;
 
@@ -362,6 +430,12 @@ struct radix_tree<Key, Value, BytesView>::tagged_node_ptr {
 	tagged_node_ptr &operator=(std::nullptr_t);
 	tagged_node_ptr &operator=(const persistent_ptr<leaf> &rhs);
 	tagged_node_ptr &operator=(const persistent_ptr<node> &rhs);
+
+	void
+	action_assign(actions &acts, const tagged_node_ptr &other)
+	{
+		ptr.action_assign(acts, other.ptr);
+	}
 
 	bool operator==(const tagged_node_ptr &rhs) const;
 	bool operator!=(const tagged_node_ptr &rhs) const;
@@ -1261,6 +1335,142 @@ radix_tree<Key, Value, BytesView>::internal_emplace(const K &k, F &&make_leaf)
 	return {iterator(node->child[slice_index(key[diff], sh)].get_leaf(),
 			 &root),
 		true};
+}
+
+template <typename Key, typename Value, typename BytesView>
+template <typename K, typename V>
+void
+radix_tree<Key, Value, BytesView>::try_emplace_act(K &&k, V &&v)
+{
+	auto key = bytes_view(k);
+	auto pop = pool_base(pmemobj_pool_by_ptr(this));
+
+	actions acts(pop, 3);
+
+	auto make_leaf = [&](tagged_node_ptr parent) {
+		auto key_size = total_sizeof<Key>::value(k);
+		auto val_size = total_sizeof<Value>::value(v);
+		auto ptr = persistent_ptr<leaf>((leaf *)acts.allocate(
+			sizeof(leaf) + key_size + val_size));
+
+		auto key_dst = reinterpret_cast<Key *>(ptr.get() + 1);
+		auto val_dst = reinterpret_cast<Value *>(
+			reinterpret_cast<char *>(key_dst) + key_size);
+
+		new (ptr.get()) leaf();
+		new (key_dst) Key(std::forward<K>(k));
+		new (val_dst) Value(std::forward<V>(v));
+
+		ptr->parent = parent;
+
+		acts.set_value(&size_.get_rw(), size_ + 1);
+
+		pmemobj_flush(pop.handle(), ptr.get(),
+			      sizeof(leaf) + key_size + val_size);
+
+		return ptr;
+	};
+
+	if (!root) {
+		this->root.action_assign(acts, make_leaf(nullptr));
+		acts.publish();
+		return;
+	}
+
+	/*
+	 * Need to descend the tree twice. First to find a leaf that
+	 * represents a subtree that shares a common prefix with the key.
+	 * This is needed to find out the actual labels between nodes (they
+	 * are not known due to a possible path compression). Second time to
+	 * find the place for the new element.
+	 */
+	auto leaf = common_prefix_leaf(key);
+	auto leaf_key = bytes_view(leaf->key());
+	auto diff = prefix_diff(key, leaf_key);
+	auto sh = bit_diff(leaf_key, key, diff);
+
+	/* Key exists. */
+	if (diff == key.size() && leaf_key.size() == key.size())
+		return;
+
+	/* Descend into the tree again. */
+	tagged_node_ptr *slot;
+	tagged_node_ptr prev;
+	std::tie(slot, prev) = descend(key, diff, sh);
+
+	auto n = *slot;
+
+	/*
+	 * If the divergence point is at same nib as an existing node, and
+	 * the subtree there is empty, just place our leaf there and we're
+	 * done.  Obviously this can't happen if SLICE == 1.
+	 */
+	if (!n) {
+		assert(diff < (std::min)(leaf_key.size(), key.size()));
+
+		slot->action_assign(acts, make_leaf(prev));
+		acts.publish();
+		return;
+	}
+
+	/* New key is a prefix of the leaf key or they are equal. We need to add
+	 * leaf ptr to internal node. */
+	if (diff == key.size()) {
+		if (!n.is_leaf() && path_length_equal(key.size(), n)) {
+			assert(!n->embedded_entry);
+
+			n->embedded_entry.action_assign(acts, make_leaf(n));
+			acts.publish();
+			return;
+		}
+
+		/* Path length from root to n is longer than key.size().
+		 * We have to allocate new internal node above n. */
+		tagged_node_ptr node = persistent_ptr<radix_tree::node>(
+			(radix_tree::node *)acts.allocate(
+				sizeof(radix_tree::node)));
+		new (node.get_node()) radix_tree::node(parent_ref(n), diff,
+						       bitn_t(FIRST_NIB));
+		node->embedded_entry = make_leaf(node);
+		node->child[slice_index(leaf_key[diff], bitn_t(FIRST_NIB))] = n;
+		parent_ref(n).action_assign(acts, node);
+		slot->action_assign(acts, node);
+		pmemobj_flush(pop.handle(), node.get_node(),
+			      sizeof(radix_tree::node));
+		acts.publish();
+		return;
+	}
+
+	if (diff == leaf_key.size()) {
+		/* Leaf key is a prefix of the new key. We need to convert leaf
+		 * to a node. */
+		tagged_node_ptr node = persistent_ptr<radix_tree::node>(
+			(radix_tree::node *)acts.allocate(
+				sizeof(radix_tree::node)));
+		new (node.get_node()) radix_tree::node(parent_ref(n), diff,
+						       bitn_t(FIRST_NIB));
+		node->embedded_entry = n;
+		node->child[slice_index(key[diff], bitn_t(FIRST_NIB))] =
+			make_leaf(node);
+		parent_ref(n).action_assign(acts, node);
+		slot->action_assign(acts, node);
+		pmemobj_flush(pop.handle(), node.get_node(),
+			      sizeof(radix_tree::node));
+		acts.publish();
+		return;
+		;
+	}
+
+	tagged_node_ptr node = persistent_ptr<radix_tree::node>(
+		(radix_tree::node *)acts.allocate(sizeof(radix_tree::node)));
+	new (node.get_node()) radix_tree::node(parent_ref(n), diff, sh);
+	node->child[slice_index(leaf_key[diff], sh)] = n;
+	node->child[slice_index(key[diff], sh)] = make_leaf(node);
+	parent_ref(n).action_assign(acts, node);
+	slot->action_assign(acts, node);
+	pmemobj_flush(pop.handle(), node.get_node(), sizeof(radix_tree::node));
+	acts.publish();
+	return;
 }
 
 /**

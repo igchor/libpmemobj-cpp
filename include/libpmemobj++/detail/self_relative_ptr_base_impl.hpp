@@ -120,6 +120,16 @@ public:
 		return *this;
 	}
 
+	template <typename Actions>
+	void
+	action_assign(Actions &acts, self_relative_ptr_base_impl const &r)
+	{
+		if (this == &r)
+			return;
+
+		acts.set_value((uint64_t *)&offset, pointer_to_offset(r));
+	}
+
 	/**
 	 * Swaps two self_relative_ptr_base objects of the same type.
 	 *
